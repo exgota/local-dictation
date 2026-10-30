@@ -1,0 +1,18 @@
+TranscriptionBenchmark stream, Neural Engine, October 26, 2026.
+
+Fed as fast as possible (the stream buffer accumulates a backlog, so memory and end-to-text are inflated):
+long.wav: audio 324.0 s, 28 chunks, transcribed 324.0 s, end to text 4.75 s, footprint max 60 MB (sampled), now 76 MB
+quiet-long-3min.wav: audio 179.2 s, 16 chunks, transcribed 179.2 s, end to text 2.81 s, footprint max 76 MB (sampled), now 78 MB
+long-15min.wav: audio 972.1 s, 85 chunks, transcribed 972.1 s, end to text 10.99 s, footprint max 128 MB (sampled), now 55 MB
+
+Word error rate against the scripts (word_error_rate.py):
+long.stream.transcript.txt: 7/868 errors, WER 0.81%
+quiet-long-3min.stream.transcript.txt: 10/477 errors, WER 2.10%
+long-15min.stream.transcript.txt: 55/2604 errors, WER 2.11%
+
+Fed at 20 times real time (no backlog; this is the memory figure that matters):
+footprint after load: 57 MB
+quiet-long-3min.wav: audio 179.2 s, 16 chunks, transcribed 179.2 s, end to text 0.13 s, footprint max 53 MB (sampled), now 45 MB
+long-15min.wav: audio 972.1 s, 85 chunks, transcribed 972.1 s, end to text 1.37 s, footprint max 49 MB (sampled), now 48 MB
+
+Installed app, idle after model load (top, 3 samples 2 s apart): 0.0 % CPU, footprint 96 MB, peak 102 MB.

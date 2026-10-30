@@ -1,0 +1,102 @@
+[
+  {
+    "metadataOutputVersion" : "3.0",
+    "shortDescription" : "Bark Pro JointDecisionv3, floating-point Core ML export",
+    "outputSchema" : [
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Int32",
+        "formattedType" : "MultiArray (Int32 1 × 1 × 1)",
+        "shortDescription" : "",
+        "shape" : "[1, 1, 1]",
+        "name" : "token_id",
+        "type" : "MultiArray"
+      },
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Float32",
+        "formattedType" : "MultiArray (Float32 1 × 1 × 1)",
+        "shortDescription" : "",
+        "shape" : "[1, 1, 1]",
+        "name" : "token_prob",
+        "type" : "MultiArray"
+      },
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Int32",
+        "formattedType" : "MultiArray (Int32 1 × 1 × 1)",
+        "shortDescription" : "",
+        "shape" : "[1, 1, 1]",
+        "name" : "duration",
+        "type" : "MultiArray"
+      }
+    ],
+    "storagePrecision" : "Float16",
+    "modelParameters" : [
+
+    ],
+    "author" : "Conway Research",
+    "specificationVersion" : 8,
+    "mlProgramOperationTypeHistogram" : {
+      "Ios17.reduceArgmax" : 2,
+      "Ios17.squeeze" : 1,
+      "Ios17.cast" : 4,
+      "Ios17.linear" : 3,
+      "Ios17.transpose" : 2,
+      "Ios17.sliceByIndex" : 2,
+      "Ios17.add" : 1,
+      "Ios16.relu" : 1,
+      "Ios16.softmax" : 1,
+      "Ios17.gatherAlongAxis" : 1,
+      "Ios17.expandDims" : 3
+    },
+    "computePrecision" : "Mixed (Float16, Float32, Int16, Int32)",
+    "isUpdatable" : "0",
+    "stateSchema" : [
+
+    ],
+    "availability" : {
+      "macOS" : "14.0",
+      "tvOS" : "17.0",
+      "visionOS" : "1.0",
+      "watchOS" : "10.0",
+      "iOS" : "17.0",
+      "macCatalyst" : "17.0"
+    },
+    "modelType" : {
+      "name" : "MLModelType_mlProgram"
+    },
+    "inputSchema" : [
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Float32",
+        "formattedType" : "MultiArray (Float32 1 × 1024 × 1)",
+        "shortDescription" : "",
+        "shape" : "[1, 1024, 1]",
+        "name" : "encoder_step",
+        "type" : "MultiArray"
+      },
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Float32",
+        "formattedType" : "MultiArray (Float32 1 × 640 × 1)",
+        "shortDescription" : "",
+        "shape" : "[1, 640, 1]",
+        "name" : "decoder_step",
+        "type" : "MultiArray"
+      }
+    ],
+    "userDefinedMetadata" : {
+      "com.github.apple.coremltools.source_dialect" : "TorchScript",
+      "com.github.apple.coremltools.source" : "torch==2.7.0",
+      "com.github.apple.coremltools.version" : "9.0"
+    },
+    "generatedClassName" : "JointDecisionv3",
+    "method" : "predict"
+  }
+]

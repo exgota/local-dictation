@@ -1,0 +1,38 @@
+=== ane (process 1)
+compile Preprocessor: 0.06 s
+compile Encoder: 0.27 s
+compile Decoder: 0.02 s
+compile JointDecisionv3: 0.02 s
+footprint before load: 33 MB
+load (ane): 38.81 s
+footprint after load: 101 MB, peak 101 MB
+short.wav [short8] first: audio 4.9 s, processing 0.63 s, RTF 0.128, footprint 102 MB -> 108 MB, peak 108 MB
+short.wav [short8] repeat: audio 4.9 s, processing 0.06 s, RTF 0.012, footprint 108 MB -> 108 MB, peak 108 MB
+medium.wav [full15] first: audio 13.7 s, processing 0.13 s, RTF 0.009, footprint 108 MB -> 114 MB, peak 114 MB
+medium.wav [full15] repeat: audio 13.7 s, processing 0.11 s, RTF 0.008, footprint 114 MB -> 101 MB, peak 114 MB
+long.wav [full15] first: audio 324.0 s, processing 1.44 s, RTF 0.004, footprint 121 MB -> 138 MB, peak 164 MB
+long.wav [full15] repeat: audio 324.0 s, processing 1.86 s, RTF 0.006, footprint 138 MB -> 117 MB, peak 164 MB
+silence.wav [short8] first: audio 2.9 s, processing 0.05 s, RTF 0.016, footprint 117 MB -> 117 MB, peak 164 MB
+silence.wav [short8] repeat: audio 2.9 s, processing 0.04 s, RTF 0.015, footprint 117 MB -> 117 MB, peak 164 MB
+phone.wav [full15] first: audio 31.4 s, processing 0.31 s, RTF 0.010, footprint 117 MB -> 118 MB, peak 164 MB
+phone.wav [full15] repeat: audio 31.4 s, processing 0.31 s, RTF 0.010, footprint 118 MB -> 117 MB, peak 164 MB
+       44.48 real        10.33 user         2.80 sys
+          1259962368  maximum resident set size
+           172311296  peak memory footprint
+=== gpu (process 1)
+footprint before load: 2 MB
+load (gpu): 14.84 s
+footprint after load: 40 MB, peak 88 MB
+short.wav [short8] first: audio 4.9 s, processing 33.63 s, RTF 6.827, footprint 40 MB -> 141 MB, peak 141 MB
+short.wav [short8] repeat: audio 4.9 s, processing 0.22 s, RTF 0.045, footprint 139 MB -> 146 MB, peak 147 MB
+medium.wav [full15] first: audio 13.7 s, processing 60.38 s, RTF 4.409, footprint 146 MB -> 194 MB, peak 221 MB
+medium.wav [full15] repeat: audio 13.7 s, processing 0.44 s, RTF 0.032, footprint 194 MB -> 231 MB, peak 231 MB
+long.wav [full15] first: audio 324.0 s, processing 12.74 s, RTF 0.039, footprint 250 MB -> 557 MB, peak 634 MB
+long.wav [full15] repeat: audio 324.0 s, processing 10.87 s, RTF 0.034, footprint 557 MB -> 481 MB, peak 641 MB
+silence.wav [short8] first: audio 2.9 s, processing 1.97 s, RTF 0.670, footprint 481 MB -> 518 MB, peak 641 MB
+silence.wav [short8] repeat: audio 2.9 s, processing 0.40 s, RTF 0.136, footprint 518 MB -> 518 MB, peak 641 MB
+phone.wav [full15] first: audio 31.4 s, processing 4.45 s, RTF 0.142, footprint 519 MB -> 473 MB, peak 641 MB
+phone.wav [full15] repeat: audio 31.4 s, processing 2.70 s, RTF 0.086, footprint 473 MB -> 479 MB, peak 641 MB
+      143.72 real        16.95 user        14.40 sys
+          3950231552  maximum resident set size
+           672481792  peak memory footprint

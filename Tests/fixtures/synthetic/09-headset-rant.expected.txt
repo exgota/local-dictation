@@ -1,0 +1,1 @@
+So the thing about the settings window is that, um, it scrolls when it really should not, and uh I think the fix is to size the window to its content instead of hiding the scroll bar. Um, the other thing is the pill, it should fade in and out quickly and never take focus from the app I am typing in.

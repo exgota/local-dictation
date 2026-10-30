@@ -1,0 +1,12 @@
+.build/
+dist/
+*.xcodeproj/
+.swiftpm/
+.claude/
+Tests/fixtures/*/*.wav
+Tests/fixtures/*/*.actual.txt
+Tests/fixtures/*/*.transcript.txt
+Tests/EndToEnd/results/
+Tests/EndToEnd/post_keyboard_events
+Tests/EndToEnd/*.txt
+!Tests/EndToEnd/long-recording-script.txt

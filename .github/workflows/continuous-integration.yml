@@ -1,0 +1,40 @@
+name: Continuous integration
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build
+        run: swift build -c release
+      - name: Unit tests
+        run: swift test
+
+  release:
+    # A pushed tag such as v1.0 builds the app, signs it ad hoc and attaches it to a GitHub Release.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: macos-26
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the application
+        run: ./build_application.sh
+      - name: Package
+        run: ditto -c -k --keepParent "dist/Local Dictation.app" Local-Dictation.zip
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v heading="## $version " 'index($0, heading) == 1 {found = 1; next} found && /^## / {exit} found' \
+            CHANGELOG.md > release-notes.md
+          gh release create "$GITHUB_REF_NAME" Local-Dictation.zip --title "Local Dictation $version" \
+            --notes-file release-notes.md

@@ -1,0 +1,78 @@
+=== toggle_bars
+recording started (toggle) target TextEdit
+recording stopped: 7.71 s of audio
+transcribed 1 chunks, 6.1 of 7.7 s with speech: 98 characters, stop to result 0.798 s
+inserted into TextEdit by accessibilityInsertion with profile verbatim
+document: Please schedule the quarterly review for Thursday afternoon and send the agenda to the whole team.
+clipboard: clipboard sentinel toggle
+=== first_syllable
+recording started (toggle) target TextEdit
+recording stopped: 3.57 s of audio
+transcribed 1 chunks, 2.0 of 3.6 s with speech: 21 characters, stop to result 0.259 s
+inserted into TextEdit by accessibilityInsertion with profile verbatim
+document: banana bread is ready
+=== short_tap
+recording started (toggle) target TextEdit
+recording stopped: 0.76 s of audio
+completed: The recording was too short.
+document: []
+=== silence
+recording started (toggle) target TextEdit
+recording stopped: 3.66 s of audio
+transcribed 0 chunks, 0.0 of 3.7 s with speech: 0 characters, stop to result 0.032 s
+completed: No speech was recognized.
+document: []
+=== selection_undo
+recording started (toggle) target TextEdit
+recording stopped: 3.54 s of audio
+transcribed 1 chunks, 1.7 of 3.5 s with speech: 9 characters, stop to result 2.509 s
+inserted into TextEdit by accessibilityInsertion with profile verbatim
+after dictation: Meeting moved to wednesday today.
+after undo: Meeting moved to OLDWORD today.
+=== focus_change
+recording started (toggle) target TextEdit
+recording stopped: 8.81 s of audio
+transcribed 1 chunks, 6.4 of 8.8 s with speech: 98 characters, stop to result 0.726 s
+completed: Focus moved before the text was inserted.
+, 
+clipboard: Please schedule the quarterly review for Thursday afternoon and send the agenda to the whole team.
+=== escape_recording
+recording started (toggle) target TextEdit
+cancelled during recording
+document: []
+=== escape_transcribing
+recording started (toggle) target TextEdit
+recording stopped: 41.13 s of audio
+cancelled during transcription
+document: []
+=== overlapping_dictations
+recording started (toggle) target TextEdit
+recording stopped: 3.95 s of audio
+transcribed 1 chunks, 2.2 of 3.9 s with speech: 14 characters, stop to result 0.214 s
+inserted into TextEdit by accessibilityInsertion with profile verbatim
+recording started (toggle) target TextEdit
+recording stopped: 2.44 s of audio
+transcribed 1 chunks, 2.4 of 2.4 s with speech: 4 characters, stop to result 0.111 s
+inserted into TextEdit by accessibilityInsertion with profile verbatim
+document: first sentence Yes.
+clipboard: clipboard sentinel overlap
+=== hold_right_option
+recording started (hold) target TextEdit
+recording stopped: 7.12 s of audio
+transcribed 1 chunks, 7.1 of 7.1 s with speech: 97 characters, stop to result 0.194 s
+inserted into TextEdit by accessibilityInsertion with profile verbatim
+document: please schedule the quarterly review for thursday afternoon and send the agenda to the whole team
+clipboard: clipboard sentinel hold
+=== chrome_paste
+recording started (toggle) target Google Chrome
+recording stopped: 7.65 s of audio
+transcribed 1 chunks, 6.1 of 7.6 s with speech: 98 characters, stop to result 0.289 s
+inserted into Google Chrome by paste with profile verbatim
+clipboard after: clipboard sentinel chrome
+textarea: Please schedule the quarterly review for Thursday afternoon and send the agenda to the whole team.
+=== chat_profile
+recording started (toggle) target TextEdit
+recording stopped: 7.32 s of audio
+transcribed 1 chunks, 5.5 of 7.3 s with speech: 62 characters, stop to result 0.269 s
+inserted into TextEdit by accessibilityInsertion with profile verbatim
+document: um so let's send it tomorrow scratch that send it today period

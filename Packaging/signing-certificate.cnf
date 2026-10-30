@@ -1,0 +1,10 @@
+[ req ]
+distinguished_name = subject
+x509_extensions = extensions
+prompt = no
+[ subject ]
+CN = Local Dictation Development
+[ extensions ]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = critical,codeSigning

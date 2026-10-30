@@ -1,0 +1,15 @@
+ok       Microphone permission     Granted
+ok       Accessibility permission  Granted
+ok       Event tap                 installed, enabled; re-enabled after 0 timeouts and 0 user-input disables; 0 events dropped
+ok       Speech model              Ready
+ok       Input Monitoring          Granted; not required, the event tap runs under Accessibility
+ok       Fn key mapping            macOS Fn action is Do Nothing
+ok       Secure input              Not held
+ok       Microphone                System default
+ok       Model cache               Compiled Underdog Bark 3.0 Pro 4b5c51e and Silero VAD b419383 at ~/Library/Application Support/LocalDictation/Models
+ok       Installation              ~/Applications/Local Dictation.app
+ok       Signing identity          Certificate SHA-1 08C3908B94C45A28C421181CAD0B367880EBCE86
+ok       Recent errors             None in the last 24 hours
+
+Result: clean
+doctor exit 0

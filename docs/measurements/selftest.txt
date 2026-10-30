@@ -1,0 +1,17 @@
+Self-test of 12 fixtures in Tests/fixtures/synthetic (synthetic speech: results are @weak)
+
+FAIL @weak  quiet    2.5 s  WER  11.1%  latency 0.12 s  01-quiet-short
+PASS @weak  quiet    7.4 s  WER   0.0%  latency 0.21 s  02-quiet-names
+PASS @weak  quiet    3.6 s  WER   0.0%  latency 0.10 s  03-quiet-punct
+PASS @weak  quiet   16.1 s  WER   0.0%  latency 0.64 s  04-quiet-fillers
+PASS @weak  quiet    6.6 s  WER   0.0%  latency 0.21 s  05-quiet-pause
+PASS @weak  quiet  194.7 s  WER   2.1%  latency 0.15 s  06-quiet-long
+PASS @weak  noise    2.5 s  WER   0.0%  latency 0.56 s  07-noise-short
+PASS @weak  noise   25.1 s  WER   2.1%  latency 0.17 s  08-noise-rant
+PASS @weak  headset   16.1 s  WER   0.0%  latency 0.44 s  09-headset-rant
+PASS @weak  behavior    3.5 s  WER   0.0%  latency 0.09 s  10-scratch-that
+PASS @weak  behavior    1.0 s  WER   0.0%  latency 0.00 s  11-empty-press
+PASS @weak  behavior    0.2 s  WER   0.0%    12-too-short
+
+11 of 12 passed (@weak: synthetic fixtures)
+selftest exit 1

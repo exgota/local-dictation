@@ -1,0 +1,1 @@
+Add a scroll bar fix to the settings window.

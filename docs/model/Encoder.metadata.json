@@ -1,0 +1,257 @@
+[
+  {
+    "metadataOutputVersion" : "3.0",
+    "storagePrecision" : "Mixed (Float16, Int32)",
+    "outputSchema" : [
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Float32",
+        "formattedType" : "MultiArray (Float32 1 × 1024 × 188)",
+        "shortDescription" : "",
+        "shape" : "[1, 1024, 188]",
+        "name" : "encoder",
+        "type" : "MultiArray"
+      },
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Int32",
+        "formattedType" : "MultiArray (Int32 1)",
+        "shortDescription" : "",
+        "shape" : "[1]",
+        "name" : "encoder_length",
+        "type" : "MultiArray"
+      }
+    ],
+    "modelParameters" : [
+
+    ],
+    "specificationVersion" : 9,
+    "functions" : [
+      {
+        "inputSchema" : [
+          {
+            "hasShapeFlexibility" : "0",
+            "isOptional" : "0",
+            "dataType" : "Float32",
+            "formattedType" : "MultiArray (Float32 1 × 128 × 1501)",
+            "shortDescription" : "",
+            "shape" : "[1, 128, 1501]",
+            "name" : "mel",
+            "type" : "MultiArray"
+          },
+          {
+            "hasShapeFlexibility" : "0",
+            "isOptional" : "0",
+            "dataType" : "Int32",
+            "formattedType" : "MultiArray (Int32 1)",
+            "shortDescription" : "",
+            "shape" : "[1]",
+            "name" : "mel_length",
+            "type" : "MultiArray"
+          }
+        ],
+        "computePrecision" : "Mixed (Float16, Float32, Int32)",
+        "storagePrecision" : "Mixed (Float16, Int32)",
+        "stateSchema" : [
+
+        ],
+        "outputSchema" : [
+          {
+            "hasShapeFlexibility" : "0",
+            "isOptional" : "0",
+            "dataType" : "Float32",
+            "formattedType" : "MultiArray (Float32 1 × 1024 × 188)",
+            "shortDescription" : "",
+            "shape" : "[1, 1024, 188]",
+            "name" : "encoder",
+            "type" : "MultiArray"
+          },
+          {
+            "hasShapeFlexibility" : "0",
+            "isOptional" : "0",
+            "dataType" : "Int32",
+            "formattedType" : "MultiArray (Int32 1)",
+            "shortDescription" : "",
+            "shape" : "[1]",
+            "name" : "encoder_length",
+            "type" : "MultiArray"
+          }
+        ],
+        "name" : "full15",
+        "mlProgramOperationTypeHistogram" : {
+          "Ios18.expandDims" : 5,
+          "Ios18.mul" : 99,
+          "Ios18.softmax" : 24,
+          "Ios18.matmul" : 72,
+          "Ios18.logicalNot" : 2,
+          "Ios18.floor" : 3,
+          "Split" : 24,
+          "Ios18.sigmoid" : 24,
+          "Select" : 72,
+          "Tile" : 1,
+          "Ios18.add" : 174,
+          "Ios18.layerNorm" : 120,
+          "Ios18.reshape" : 145,
+          "Pad" : 48,
+          "Ios18.linear" : 193,
+          "Ios18.conv" : 77,
+          "Ios18.relu" : 3,
+          "Ios18.silu" : 72,
+          "Ios18.logicalAnd" : 2,
+          "Ios18.transpose" : 172,
+          "Ios18.cast" : 4,
+          "Ios18.less" : 1,
+          "Ios18.sliceByIndex" : 48
+        }
+      },
+      {
+        "inputSchema" : [
+          {
+            "hasShapeFlexibility" : "0",
+            "isOptional" : "0",
+            "dataType" : "Float32",
+            "formattedType" : "MultiArray (Float32 1 × 128 × 1501)",
+            "shortDescription" : "",
+            "shape" : "[1, 128, 1501]",
+            "name" : "mel",
+            "type" : "MultiArray"
+          },
+          {
+            "hasShapeFlexibility" : "0",
+            "isOptional" : "0",
+            "dataType" : "Int32",
+            "formattedType" : "MultiArray (Int32 1)",
+            "shortDescription" : "",
+            "shape" : "[1]",
+            "name" : "mel_length",
+            "type" : "MultiArray"
+          }
+        ],
+        "computePrecision" : "Mixed (Float16, Float32, Int32)",
+        "storagePrecision" : "Mixed (Float16, Int32)",
+        "stateSchema" : [
+
+        ],
+        "outputSchema" : [
+          {
+            "hasShapeFlexibility" : "0",
+            "isOptional" : "0",
+            "dataType" : "Float32",
+            "formattedType" : "MultiArray (Float32 1 × 1024 × 101)",
+            "shortDescription" : "",
+            "shape" : "[1, 1024, 101]",
+            "name" : "encoder",
+            "type" : "MultiArray"
+          },
+          {
+            "hasShapeFlexibility" : "0",
+            "isOptional" : "0",
+            "dataType" : "Int32",
+            "formattedType" : "MultiArray (Int32 1)",
+            "shortDescription" : "",
+            "shape" : "[1]",
+            "name" : "encoder_length",
+            "type" : "MultiArray"
+          }
+        ],
+        "name" : "short8",
+        "mlProgramOperationTypeHistogram" : {
+          "Ios18.expandDims" : 5,
+          "Ios18.mul" : 99,
+          "Ios18.softmax" : 24,
+          "Ios18.matmul" : 72,
+          "Ios18.logicalNot" : 2,
+          "Ios18.floor" : 3,
+          "Split" : 24,
+          "Ios18.sigmoid" : 24,
+          "Select" : 72,
+          "Tile" : 1,
+          "Ios18.add" : 174,
+          "Ios18.layerNorm" : 120,
+          "Ios18.reshape" : 145,
+          "Pad" : 48,
+          "Ios18.linear" : 193,
+          "Ios18.conv" : 77,
+          "Ios18.relu" : 3,
+          "Ios18.silu" : 72,
+          "Ios18.logicalAnd" : 2,
+          "Ios18.transpose" : 172,
+          "Ios18.cast" : 4,
+          "Ios18.less" : 1,
+          "Ios18.sliceByIndex" : 49
+        }
+      }
+    ],
+    "mlProgramOperationTypeHistogram" : {
+      "Ios18.expandDims" : 5,
+      "Ios18.mul" : 99,
+      "Ios18.softmax" : 24,
+      "Ios18.matmul" : 72,
+      "Ios18.logicalNot" : 2,
+      "Ios18.floor" : 3,
+      "Split" : 24,
+      "Ios18.sigmoid" : 24,
+      "Select" : 72,
+      "Tile" : 1,
+      "Ios18.add" : 174,
+      "Ios18.layerNorm" : 120,
+      "Ios18.reshape" : 145,
+      "Pad" : 48,
+      "Ios18.linear" : 193,
+      "Ios18.conv" : 77,
+      "Ios18.relu" : 3,
+      "Ios18.silu" : 72,
+      "Ios18.logicalAnd" : 2,
+      "Ios18.transpose" : 172,
+      "Ios18.cast" : 4,
+      "Ios18.less" : 1,
+      "Ios18.sliceByIndex" : 48
+    },
+    "isUpdatable" : "0",
+    "stateSchema" : [
+
+    ],
+    "availability" : {
+      "macOS" : "15.0",
+      "tvOS" : "18.0",
+      "visionOS" : "2.0",
+      "watchOS" : "11.0",
+      "iOS" : "18.0",
+      "macCatalyst" : "18.0"
+    },
+    "computePrecision" : "Mixed (Float16, Float32, Int32)",
+    "modelType" : {
+      "name" : "MLModelType_mlProgram"
+    },
+    "inputSchema" : [
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Float32",
+        "formattedType" : "MultiArray (Float32 1 × 128 × 1501)",
+        "shortDescription" : "",
+        "shape" : "[1, 128, 1501]",
+        "name" : "mel",
+        "type" : "MultiArray"
+      },
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Int32",
+        "formattedType" : "MultiArray (Int32 1)",
+        "shortDescription" : "",
+        "shape" : "[1]",
+        "name" : "mel_length",
+        "type" : "MultiArray"
+      }
+    ],
+    "defaultFunctionName" : "full15",
+    "generatedClassName" : "Encoder",
+    "userDefinedMetadata" : {
+
+    },
+    "method" : "predict"
+  }
+]

@@ -1,0 +1,9 @@
+footprint before load: 2 MB
+load (ane): 6.24 s
+footprint after load: 40 MB, peak 57 MB
+short.wav [short8] first: audio 4.9 s, processing 0.70 s, RTF 0.143, footprint 40 MB -> 49 MB, peak 57 MB
+short.wav [short8] repeat: audio 4.9 s, processing 0.07 s, RTF 0.014, footprint 49 MB -> 50 MB, peak 57 MB
+long.wav [full15] first: audio 324.0 s, processing 2.21 s, RTF 0.007, footprint 70 MB -> 113 MB, peak 122 MB
+long.wav [full15] repeat: audio 324.0 s, processing 2.39 s, RTF 0.007, footprint 113 MB -> 110 MB, peak 122 MB
+       12.05 real         9.99 user         1.98 sys
+           128008912  peak memory footprint
