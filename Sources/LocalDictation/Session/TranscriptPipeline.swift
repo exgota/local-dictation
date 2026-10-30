@@ -36,8 +36,11 @@ import TranscriptHistory
     /// Loads the vocabulary file, creating it from the seed if it does not exist. Throws if it exists but is unreadable.
     func loadVocabulary() throws -> VocabularyCorrections {
         let url = ApplicationFiles.vocabularyURL
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else {
-            try? VocabularyCorrections.seed.save(to: url)
+        let attributes: [FileAttributeKey: Any]
+        do {
+            attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+            try VocabularyCorrections.seed.save(to: url)
             return .seed
         }
         let modificationDate = attributes[.modificationDate] as? Date

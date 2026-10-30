@@ -68,7 +68,7 @@ struct OnboardingView: View {
                     grantedText: "Allowed"
                 ) {
                     if permissions.microphoneDenied || permissions.microphoneGranted {
-                        Button("Open System Settings") { permissions.openSystemSettings(anchor: "Privacy_Microphone") }
+                        Button("Open System Settings") { permissions.openSystemSettings(anchor: PermissionMonitor.microphoneSettingsAnchor) }
                     } else {
                         Button("Allow microphone") { permissions.requestMicrophone(onAnswered: bringForward) }
                     }
@@ -112,7 +112,7 @@ struct OnboardingView: View {
     private var modelReason: String {
         if case .failed(let message) = model.state { return message }
         if case .installing(let phase, let fraction) = model.state {
-            let step = phase == .downloading ? "Downloading" : phase == .validating ? "Checking files" : "Preparing for this Mac"
+            let step = phase.displayName
             return "\(step), \(Int(fraction * 100)) %. If the download stops, it resumes where it left off."
         }
         return "Recognizes speech on this Mac. A one-time download of about 1.23 GB."

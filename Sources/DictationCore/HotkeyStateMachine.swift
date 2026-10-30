@@ -70,10 +70,19 @@ public struct HotkeyStateMachine: Sendable {
         case locked(armed: Bool)
     }
 
+    private enum TriggerPress {
+        case released
+        case unclean
+        case clean(startTime: TimeInterval)
+
+        var isDown: Bool {
+            if case .released = self { return false }
+            return true
+        }
+    }
+
     private var pressedModifiers: Set<UInt16> = []
-    private var triggerIsDown = false
-    private var triggerPressIsClean = false
-    private var triggerDownTime: TimeInterval = 0
+    private var triggerPress: TriggerPress = .released
     private var session: Session = .idle
 
     public init(configuration: HotkeyConfiguration) {
@@ -88,8 +97,7 @@ public struct HotkeyStateMachine: Sendable {
 
     private mutating func resetTrigger() {
         session = .idle
-        triggerIsDown = false
-        triggerPressIsClean = false
+        triggerPress = .released
     }
 
     public mutating func handle(_ input: HotkeyInput) -> [HotkeyAction] {
@@ -99,7 +107,7 @@ public struct HotkeyStateMachine: Sendable {
         case .keyDown(let keyCode, let flags, let isRepeat, let time):
             return handleKeyDown(keyCode: keyCode, flags: flags, isRepeat: isRepeat, time: time)
         case .keyUp(let keyCode, _, let time):
-            guard case .key(let chord) = configuration.trigger, keyCode == chord.keyCode, triggerIsDown else { return [] }
+            guard case .key(let chord) = configuration.trigger, keyCode == chord.keyCode, triggerPress.isDown else { return [] }
             return release(time: time)
         case .deadlineElapsed(let time):
             if case .awaitingSecondTap(let deadline) = session, time >= deadline {
@@ -118,8 +126,8 @@ public struct HotkeyStateMachine: Sendable {
         if isDown { pressedModifiers.insert(keyCode) } else { pressedModifiers.remove(keyCode) }
 
         if keyCode == configuration.trigger.modifierKeyCode {
-            if isDown && !triggerIsDown { return press(time: time, clean: !otherModifiersHeld) }
-            if !isDown && triggerIsDown { return release(time: time) }
+            if isDown && !triggerPress.isDown { return press(time: time, clean: !otherModifiersHeld) }
+            if !isDown && triggerPress.isDown { return release(time: time) }
             return []
         }
         // Another modifier went down while the trigger is held or a double tap is pending.
@@ -130,7 +138,7 @@ public struct HotkeyStateMachine: Sendable {
         -> [HotkeyAction]
     {
         if case .key(let chord) = configuration.trigger, keyCode == chord.keyCode {
-            if isRepeat || triggerIsDown { return [] }
+            if isRepeat || triggerPress.isDown { return [] }
             if chord.matches(keyCode: keyCode, flags: flags) { return press(time: time, clean: true) }
         }
         var actions = interrupt()
@@ -148,9 +156,7 @@ public struct HotkeyStateMachine: Sendable {
     // MARK: Trigger
 
     private mutating func press(time: TimeInterval, clean: Bool) -> [HotkeyAction] {
-        triggerIsDown = true
-        triggerPressIsClean = clean
-        triggerDownTime = time
+        triggerPress = clean ? .clean(startTime: time) : .unclean
         guard !isPaused, clean else { return [] }
         switch configuration.mode {
         case .toggle:
@@ -173,13 +179,13 @@ public struct HotkeyStateMachine: Sendable {
     }
 
     private mutating func release(time: TimeInterval) -> [HotkeyAction] {
-        triggerIsDown = false
-        let wasClean = triggerPressIsClean
-        triggerPressIsClean = false
+        let completedPress = triggerPress
+        triggerPress = .released
         guard !isPaused else { return [] }
         switch configuration.mode {
         case .toggle:
-            return wasClean ? [.toggle] : []
+            if case .clean = completedPress { return [.toggle] }
+            return []
         case .hold:
             guard session == .holding else { return [] }
             session = .idle
@@ -187,7 +193,7 @@ public struct HotkeyStateMachine: Sendable {
         case .doubleTapLock:
             switch session {
             case .holding:
-                if wasClean && time - triggerDownTime < Self.tapDuration {
+                if case .clean(let startTime) = completedPress, time - startTime < Self.tapDuration {
                     let deadline = time + Self.doubleTapInterval
                     session = .awaitingSecondTap(deadline: deadline)
                     return [.scheduleDeadline(deadline)]
@@ -198,7 +204,7 @@ public struct HotkeyStateMachine: Sendable {
                 session = .locked(armed: true)
                 return []
             case .locked(armed: true):
-                guard wasClean else { return [] }
+                guard case .clean = completedPress else { return [] }
                 session = .idle
                 return [.lockEnded]
             default:
@@ -210,9 +216,9 @@ public struct HotkeyStateMachine: Sendable {
     /// Another key went down. If the trigger is down, its press is no longer clean. A hold in progress ends with
     /// `.holdInterrupted`, and a pending second tap ends with `.holdEnded`.
     private mutating func interrupt() -> [HotkeyAction] {
-        if triggerIsDown { triggerPressIsClean = false }
+        if triggerPress.isDown { triggerPress = .unclean }
         switch session {
-        case .holding where triggerIsDown:
+        case .holding where triggerPress.isDown:
             session = .idle
             return [.holdInterrupted]
         case .awaitingSecondTap:

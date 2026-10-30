@@ -162,10 +162,15 @@ public actor TranscriptHistoryStore {
 
     private static func configure(_ database: OpaquePointer?) throws {
         try execute("PRAGMA journal_mode = WAL", on: database)
-        var version: Int32 = 0
-        let statement = try prepare("PRAGMA user_version", on: database)
-        if sqlite3_step(statement) == SQLITE_ROW { version = sqlite3_column_int(statement, 0) }
-        sqlite3_finalize(statement)
+        let version: Int32
+        do {
+            let statement = try prepare("PRAGMA user_version", on: database)
+            defer { sqlite3_finalize(statement) }
+            guard sqlite3_step(statement) == SQLITE_ROW else {
+                throw TranscriptHistoryError.statementFailed(message(of: database))
+            }
+            version = sqlite3_column_int(statement, 0)
+        }
         guard version <= currentSchemaVersion else { throw TranscriptHistoryError.unsupportedSchemaVersion(version) }
         if version < 1 {
             try execute("BEGIN IMMEDIATE", on: database)

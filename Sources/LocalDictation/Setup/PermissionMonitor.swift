@@ -5,6 +5,9 @@ import ApplicationServices
 /// Microphone and Accessibility authorization, polled once a second. Requests happen only from explicit onboarding
 /// actions.
 @MainActor final class PermissionMonitor: ObservableObject {
+    static let microphoneSettingsAnchor = "Privacy_Microphone"
+    static let accessibilitySettingsAnchor = "Privacy_Accessibility"
+
     @Published private(set) var microphoneGranted = false
     @Published private(set) var microphoneDenied = false
     @Published private(set) var accessibilityGranted = false
@@ -31,7 +34,7 @@ import ApplicationServices
     /// `onAnswered` runs once the user answers the system prompt, which takes focus from this app.
     func requestMicrophone(onAnswered: @escaping @MainActor () -> Void) {
         if microphoneDenied {
-            openSystemSettings(anchor: "Privacy_Microphone")
+            openSystemSettings(anchor: Self.microphoneSettingsAnchor)
             return
         }
         AVCaptureDevice.requestAccess(for: .audio) { _ in
@@ -45,7 +48,7 @@ import ApplicationServices
     func requestAccessibility() {
         // The value of kAXTrustedCheckOptionPrompt, which Swift 6 rejects as shared mutable state.
         let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-        if !AXIsProcessTrustedWithOptions(options) { openSystemSettings(anchor: "Privacy_Accessibility") }
+        if !AXIsProcessTrustedWithOptions(options) { openSystemSettings(anchor: Self.accessibilitySettingsAnchor) }
     }
 
     func openSystemSettings(anchor: String) {

@@ -130,7 +130,7 @@ import SwiftUI
     }
 
     func showTranscribing() {
-        show(.transcribing, on: screen ?? Self.screenWithMouse())
+        show(.transcribing, on: screen ?? NSScreen.screenWithMouse())
     }
 
     func showMessage(_ message: String, on screen: NSScreen) {
@@ -155,10 +155,6 @@ import SwiftUI
         }
     }
 
-    static func screenWithMouse() -> NSScreen {
-        let mouse = NSEvent.mouseLocation
-        return NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main ?? NSScreen.screens[0]
-    }
 
     private func show(_ state: HeadsUpDisplayModel.State, on screen: NSScreen) {
         self.screen = screen

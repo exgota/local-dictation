@@ -21,8 +21,12 @@ import os
     @Published private(set) var lastMessage: String?
     /// Pause-all: the trigger and re-paste hotkeys do nothing until resumed.
     @Published private(set) var isPaused = false { didSet { publishTapState() } }
-    /// True while Settings records a shortcut or a fixture, so the hotkeys do not start a dictation meanwhile.
-    var suspendsHotkeys = false { didSet { publishTapState() } }
+    enum HotkeySuspensionReason: Hashable { case shortcutCapture, fixtureRecording }
+    private var hotkeySuspensionReasons: Set<HotkeySuspensionReason> = [] { didSet { publishTapState() } }
+
+    func setHotkeysSuspended(_ suspended: Bool, for reason: HotkeySuspensionReason) {
+        if suspended { hotkeySuspensionReasons.insert(reason) } else { hotkeySuspensionReasons.remove(reason) }
+    }
 
     let settings: DictationSettings
     let permissions: PermissionMonitor
@@ -69,16 +73,16 @@ import os
         self.settings = settings
         self.permissions = permissions
         self.model = model
-        hotkeys = HotkeyStateMachine(configuration: settings.hotkeyConfiguration)
+        hotkeys = HotkeyStateMachine(configuration: settings.configuration.hotkeyConfiguration)
 
         eventTap.onEvent = { [weak self] event in self?.handle(event) }
-        eventTap.sharedState.publish(configuration: settings.hotkeyConfiguration)
+        eventTap.sharedState.publish(configuration: settings.configuration.hotkeyConfiguration)
         recorder.onLevel = { [weak self] level in self?.headsUpDisplay.setLevel(level) }
         recorder.onMaximumDurationReached = { [weak self] in self?.maximumDurationReached() }
         recorder.onCaptureInterrupted = { [weak self] error in self?.finishRecording(interruption: error) }
 
         settings.$configuration
-            .map { HotkeyConfiguration(trigger: $0.trigger, mode: $0.triggerMode, repasteChord: $0.repasteChord, pauseChord: $0.pauseChord) }
+            .map(\.hotkeyConfiguration)
             .removeDuplicates()
             .dropFirst()
             .sink { [weak self] configuration in
@@ -130,8 +134,8 @@ import os
     }
 
     private func publishTapState() {
-        eventTap.sharedState.publish(dictationActive: phase != .idle, paused: isPaused || suspendsHotkeys)
-        hotkeys.isPaused = isPaused || suspendsHotkeys
+        eventTap.sharedState.publish(dictationActive: phase != .idle, paused: isPaused || !hotkeySuspensionReasons.isEmpty)
+        hotkeys.isPaused = isPaused || !hotkeySuspensionReasons.isEmpty
     }
 
     // MARK: Hotkey events
@@ -184,7 +188,7 @@ import os
     }
 
     private func showBriefly(_ message: String) {
-        headsUpDisplay.showMessage(message, on: HeadsUpDisplayController.screenWithMouse())
+        headsUpDisplay.showMessage(message, on: NSScreen.screenWithMouse())
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             guard let self, self.phase == .idle else { return }
             self.headsUpDisplay.hide()
@@ -273,7 +277,7 @@ import os
         lastMessage = nil
         updatePhase()
         fallback.hide()
-        headsUpDisplay.showListening(on: HeadsUpDisplayController.screenWithMouse())
+        headsUpDisplay.showListening(on: NSScreen.screenWithMouse())
     }
 
     /// The start sound plays once the microphone is live, so speech that follows the sound is recorded from its first
@@ -317,7 +321,9 @@ import os
             do {
                 result = try await streaming.finish()
             } catch {
-                guard let self, self.deliveries[identifier] != nil else { return }
+                guard let self, self.deliveries[identifier] != nil, !Task.isCancelled else { return }
+                await previous?.value
+                guard self.deliveries[identifier] != nil, !Task.isCancelled else { return }
                 self.finishDelivery(identifier, message: error.localizedDescription)
                 return
             }
@@ -409,9 +415,11 @@ import os
             showFallback(text, reason: "No text field had focus", onClipboard: true, delivery: delivery)
         case .targetChanged:
             showFallback(text, reason: "Focus moved before the text was inserted", onClipboard: true, delivery: delivery)
-        case .unconfirmed:
-            // Not every unconfirmed path leaves the transcript on the clipboard, so it is put there explicitly.
-            showFallback(text, reason: "The text could not be confirmed as inserted", onClipboard: true, delivery: delivery)
+        case .unconfirmed(let clipboard):
+            if case .writeIfUnchanged(let changeCount) = clipboard {
+                TextInserter.placeOnClipboardIfUnchanged(text, since: changeCount)
+            }
+            showFallback(text, reason: "The text could not be confirmed as inserted", onClipboard: false, delivery: delivery)
         case .cancelled:
             return
         }
@@ -445,7 +453,7 @@ import os
     private func updateHeadsUpDisplay() {
         switch phase {
         case .idle: headsUpDisplay.hide()
-        case .recording: headsUpDisplay.showListening(on: HeadsUpDisplayController.screenWithMouse())
+        case .recording: headsUpDisplay.showListening(on: NSScreen.screenWithMouse())
         case .transcribing: headsUpDisplay.showTranscribing()
         }
     }
@@ -475,7 +483,7 @@ import os
             // Clearing the recording first guarantees that nothing it captured is transcribed or inserted.
             endRecording()
             recording.streaming.cancel()
-            recorder.cancel()
+            recorder.finish()
         } else {
             cancelDeliveries()
         }

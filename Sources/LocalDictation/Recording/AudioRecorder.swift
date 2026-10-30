@@ -1,3 +1,4 @@
+import DictationCore
 import AVFoundation
 import CoreAudio
 import Foundation
@@ -113,10 +114,12 @@ enum AudioRecorderError: LocalizedError {
     private let router = SampleRouter()
     private let sampleDelegate: SampleBufferReceiver
     private let captureQueue = DispatchQueue(label: "LocalDictation.AudioCapture", qos: .userInteractive)
-    private var session: AVCaptureSession?
-    /// The selection the running session was started for: nil means no session is running, and `.some(nil)` means the
-    /// system default.
-    private var sessionSelection: String??
+    private struct CaptureSession {
+        let session: AVCaptureSession
+        /// Nil selects the system default.
+        let deviceIdentifier: String?
+    }
+    private var captureSession: CaptureSession?
     private var observers: [NSObjectProtocol] = []
     private var defaultDeviceListener: AudioObjectPropertyListenerBlock?
     private var startTime: TimeInterval = 0
@@ -144,7 +147,7 @@ enum AudioRecorderError: LocalizedError {
         deviceIdentifier: String?, maximumDuration: TimeInterval, consumer: @escaping @Sendable ([Float]) -> Void,
         onFirstAudio: @escaping @MainActor () -> Void
     ) throws {
-        if isRecording { cancel() }
+        if isRecording { finish() }
         stopSession()
         restartCount = 0
         try startSession(deviceIdentifier: deviceIdentifier)
@@ -170,11 +173,7 @@ enum AudioRecorderError: LocalizedError {
         durationTimer = nil
         isRecording = false
         stopSession()
-        return Double(samples) / 16_000
-    }
-
-    func cancel() {
-        finish()
+        return Double(samples) / Double(SpeechAudioFormat.sampleRate)
     }
 
     /// Seconds since `start` while recording, 0 otherwise.
@@ -182,13 +181,13 @@ enum AudioRecorderError: LocalizedError {
 
     /// Restarts capture for the current recording after the system wakes, because audio devices may have been reset.
     func restartAfterWake() {
-        guard isRecording, let selection = sessionSelection else { return }
-        restart(selection: selection)
+        guard isRecording, let captureSession else { return }
+        restart(selection: captureSession.deviceIdentifier)
     }
 
     /// With "System default" selected, capture follows the default input when it changes.
     private func defaultInputChanged() {
-        guard let selection = sessionSelection, selection == nil else { return }
+        guard let captureSession, captureSession.deviceIdentifier == nil else { return }
         restart(selection: nil)
     }
 
@@ -228,7 +227,7 @@ enum AudioRecorderError: LocalizedError {
         }
         let output = AVCaptureAudioDataOutput()
         output.audioSettings = [
-            AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16_000, AVNumberOfChannelsKey: 1,
+            AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: SpeechAudioFormat.sampleRate, AVNumberOfChannelsKey: 1,
             AVLinearPCMBitDepthKey: 32, AVLinearPCMIsFloatKey: true, AVLinearPCMIsNonInterleaved: true,
             AVLinearPCMIsBigEndianKey: false,
         ]
@@ -247,13 +246,12 @@ enum AudioRecorderError: LocalizedError {
             guard !startingSession.isRunning else { return }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard let self, self.session === startingSession, self.isRecording else { return }
+                    guard let self, self.captureSession?.session === startingSession, self.isRecording else { return }
                     self.onCaptureInterrupted(AudioRecorderError.inputUnavailable)
                 }
             }
         }
-        self.session = session
-        sessionSelection = .some(deviceIdentifier)
+        captureSession = CaptureSession(session: session, deviceIdentifier: deviceIdentifier)
         let center = NotificationCenter.default
         observers = [
             center.addObserver(forName: AVCaptureDevice.wasDisconnectedNotification, object: device, queue: .main) { [weak self] _ in
@@ -269,12 +267,11 @@ enum AudioRecorderError: LocalizedError {
         observers.forEach(NotificationCenter.default.removeObserver)
         observers = []
         // Queued behind any pending startRunning on the same serial queue, so a quick start and stop stay ordered.
-        if let session {
+        if let session = captureSession?.session {
             nonisolated(unsafe) let stoppingSession = session
             captureQueue.async { stoppingSession.stopRunning() }
         }
-        session = nil
-        sessionSelection = nil
+        captureSession = nil
     }
 
     private static var defaultInputAddress: AudioObjectPropertyAddress {
@@ -314,8 +311,8 @@ private final class SampleBufferReceiver: NSObject, AVCaptureAudioDataOutputSamp
     }
 }
 
-/// Routes converted audio from the capture queue to the consumer while recording. The router holds the lock only to
-/// read and swap state and calls the consumer outside it.
+/// Routes converted audio from the capture queue to the consumer while recording. The lock covers sample delivery so
+/// that ending a recording waits for the consumer. The level callback runs outside the lock.
 private final class SampleRouter: @unchecked Sendable {
     private struct State {
         var consumer: (@Sendable ([Float]) -> Void)?
@@ -351,19 +348,17 @@ private final class SampleRouter: @unchecked Sendable {
     }
 
     func receive(_ samples: [Float], level: Float) {
-        let targets = state.withLock { state in
-            var firstAudio: (callback: @Sendable (TimeInterval) -> Void, delay: TimeInterval)?
-            if state.consumer != nil {
+        let levelCallback = state.withLock { state in
+            if let consumer = state.consumer {
                 state.recordedSamples += samples.count
                 if let callback = state.firstAudio {
-                    firstAudio = (callback, ProcessInfo.processInfo.systemUptime - state.beginTime)
                     state.firstAudio = nil
+                    callback(ProcessInfo.processInfo.systemUptime - state.beginTime)
                 }
+                consumer(samples)
             }
-            return (consumer: state.consumer, level: state.level, firstAudio: firstAudio)
+            return state.level
         }
-        if let firstAudio = targets.firstAudio { firstAudio.callback(firstAudio.delay) }
-        targets.consumer?(samples)
-        targets.level?(level)
+        levelCallback?(level)
     }
 }

@@ -11,11 +11,22 @@ final class SpeechChunkPlannerTests: XCTestCase {
     /// was emitted or discarded exactly once.
     private func run(_ probabilities: [Float], finish: Bool = true, planner: inout SpeechChunkPlanner) -> [SpeechChunkPlanner.Command] {
         var commands: [SpeechChunkPlanner.Command] = []
-        for probability in probabilities { commands += planner.addFrame(speechProbability: probability) }
+        for probability in probabilities {
+            for command in planner.addFrame(speechProbability: probability) {
+                if case .cut(let cut) = command {
+                    let count = (cut.searchFrames.lowerBound + cut.searchFrames.upperBound + 1) / 2
+                    planner.completeCut(frameCount: count)
+                    commands.append(.emit(frameCount: count))
+                } else {
+                    commands.append(command)
+                }
+            }
+        }
         if finish { commands += planner.finish() }
         let accounted = commands.reduce(0) { total, command in
             switch command {
             case .emit(let count), .discard(let count): return total + count
+            case .cut: XCTFail("unconfirmed cut"); return total
             }
         }
         if finish { XCTAssertEqual(accounted, probabilities.count, "every frame is emitted or discarded exactly once") }
@@ -66,21 +77,53 @@ final class SpeechChunkPlannerTests: XCTestCase {
         XCTAssertEqual(emitted(commands), [21])
     }
 
-    func testCutsAtFirstPauseAfterMinimum() {
+    func testSingleQuietFrameAfterMinimumDoesNotCut() {
         var planner = SpeechChunkPlanner()
         let probabilities = Array(repeating: speech, count: 35) + [silence] + Array(repeating: speech, count: 10)
         let commands = run(probabilities, planner: &planner)
-        XCTAssertEqual(emitted(commands), [36, 10])
+        XCTAssertEqual(emitted(commands), [46])
+    }
+
+    func testTwoQuietFramesAfterMinimumProposePause() {
+        var planner = SpeechChunkPlanner()
+        for _ in 0..<35 { XCTAssertEqual(planner.addFrame(speechProbability: speech), []) }
+        XCTAssertEqual(planner.addFrame(speechProbability: silence), [])
+        guard case .cut(let cut) = planner.addFrame(speechProbability: silence).first else {
+            return XCTFail("expected a pause cut")
+        }
+        XCTAssertEqual(cut.searchFrames, 35..<37)
+        planner.completeCut(frameCount: 36)
+        XCTAssertEqual(planner.framesSinceSpeech, 2)
+        _ = planner.addFrame(speechProbability: speech)
+        XCTAssertEqual(planner.framesSinceSpeech, 0)
+    }
+
+    func testSingleQuietFrameLaterInChunkProposesPause() {
+        var planner = SpeechChunkPlanner()
+        for _ in 0..<42 { XCTAssertEqual(planner.addFrame(speechProbability: speech), []) }
+        guard case .cut(let cut) = planner.addFrame(speechProbability: silence).first else {
+            return XCTFail("expected a pause cut")
+        }
+        XCTAssertEqual(cut.searchFrames, 42..<43)
+        planner.completeCut(frameCount: 43)
+    }
+
+    func testFinalPartialFrameDoesNotStartAnExtraChunk() {
+        var planner = SpeechChunkPlanner()
+        for _ in 0..<30 { _ = planner.addFrame(speechProbability: speech) }
+        XCTAssertEqual(planner.addFrame(speechProbability: silence), [])
+        XCTAssertEqual(planner.addFrame(speechProbability: silence, allowCut: false), [])
+        XCTAssertEqual(planner.finish(), [.emit(frameCount: 32)])
     }
 
     func testForcedCutNeverExceedsMaximum() {
         var planner = SpeechChunkPlanner()
         var probabilities = Array(repeating: speech, count: 200)
-        probabilities[50] = 0.6 // the least speech-like frame inside the search window
+        probabilities[43] = 0.6 // the least speech-like frame inside the search window
         let commands = run(probabilities, planner: &planner)
         let chunks = emitted(commands)
         XCTAssertTrue(chunks.allSatisfy { $0 <= SpeechChunkPlanner.Configuration.standard.maximumChunkFrames }, "\(chunks)")
-        XCTAssertEqual(chunks.first, 51, "cut after the quietest recent frame")
+        XCTAssertEqual(chunks.first, 44, "cut near the quietest recent frame")
         XCTAssertEqual(chunks.reduce(0, +), 200)
     }
 
@@ -95,6 +138,10 @@ final class SpeechChunkPlannerTests: XCTestCase {
             for command in planner.addFrame(speechProbability: probability) {
                 switch command {
                 case .emit(let count), .discard(let count): retained -= count
+                case .cut(let cut):
+                    let count = (cut.searchFrames.lowerBound + cut.searchFrames.upperBound + 1) / 2
+                    planner.completeCut(frameCount: count)
+                    retained -= count
                 }
             }
             maximumRetained = max(maximumRetained, retained)
@@ -105,7 +152,8 @@ final class SpeechChunkPlannerTests: XCTestCase {
     func testTrailingSilenceDurationForAutoStop() {
         var planner = SpeechChunkPlanner()
         _ = run(Array(repeating: speech, count: 3) + Array(repeating: silence, count: 8), finish: false, planner: &planner)
-        XCTAssertEqual(planner.trailingSilenceDuration, 8 * SpeechChunkPlanner.frameDuration, accuracy: 0.001)
+        XCTAssertEqual(
+            planner.trailingSilenceDuration, Double(8 * SpeechChunkPlanner.frameSampleCount) / 16_000, accuracy: 0.001)
         XCTAssertTrue(planner.hasDetectedSpeech)
     }
 }

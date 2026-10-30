@@ -1,3 +1,4 @@
+import DictationCore
 import DictationEngine
 import Foundation
 
@@ -94,8 +95,8 @@ import Foundation
                 let voiceActivity = try VoiceActivityDetector(compiledModelURL: voiceActivityModelURL)
                 // The first prediction of each encoder function is slower. These two calls, one per function, take that
                 // cost now instead of in the first dictation.
-                _ = try? await transcriber.transcribe([Float](repeating: 0, count: 16_000))
-                _ = try? await transcriber.transcribe([Float](repeating: 0, count: 16_000 * 10))
+                _ = try? await transcriber.transcribe([Float](repeating: 0, count: SpeechAudioFormat.sampleRate))
+                _ = try? await transcriber.transcribe([Float](repeating: 0, count: SpeechAudioFormat.sampleRate * 10))
                 guard self.transcriber === transcriber else { return }
                 self.voiceActivity = voiceActivity
                 state = .ready
@@ -110,5 +111,15 @@ import Foundation
     func makeStreamingTranscription(onActivity: @escaping @Sendable (StreamingTranscription.Activity) -> Void) -> StreamingTranscription? {
         guard state == .ready, let transcriber, let voiceActivity else { return nil }
         return StreamingTranscription(transcriber: transcriber, voiceActivity: voiceActivity, onActivity: onActivity)
+    }
+}
+
+extension InstallationProgress.Phase {
+    var displayName: String {
+        switch self {
+        case .downloading: return "Downloading"
+        case .validating: return "Checking files"
+        case .compiling: return "Preparing for this Mac"
+        }
     }
 }

@@ -23,15 +23,17 @@ public struct FocusedElementDescription: Equatable, Sendable {
 public enum InjectionMethod: String, Equatable, Sendable {
     /// Set `AXSelectedText` and confirm by reading the element back.
     case accessibilityInsertion
-    /// Clipboard and Command-V, confirmed when the target reads the clipboard.
+    /// Clipboard and Command-V, signaled when a process reads the clipboard.
     case paste
 }
 
 public enum InjectionDecision: Equatable, Sendable {
     case refuseSecureField
     case noEditableFocus
-    /// Try these methods in order.
-    case attempt([InjectionMethod])
+    /// Try Accessibility insertion, followed by paste if it demonstrably fails.
+    case accessibilityThenPaste
+    /// Try paste only.
+    case paste
 }
 
 public enum InjectionPlanner {
@@ -45,23 +47,31 @@ public enum InjectionPlanner {
         if element.isSecure { return .refuseSecureField }
         guard element.isEditable || element.acceptsSelectedTextInsertion else { return .noEditableFocus }
         // Accessibility insertion goes first only when the field can be read back. Without a read-back its outcome can
-        // be neither confirmed nor ruled out, and paste, which the clipboard read confirms, is the better first
+        // be neither confirmed nor ruled out, and paste, which a clipboard read signals, is the better first
         // choice.
         if element.acceptsSelectedTextInsertion && element.isValueReadable && !applicationIgnoresAccessibilityInsertion {
-            return .attempt([.accessibilityInsertion, .paste])
+            return .accessibilityThenPaste
         }
-        return .attempt([.paste])
+        return .paste
     }
+}
+
+/// Whether a fallback may put the transcript on the clipboard.
+public enum ClipboardFallback: Equatable, Sendable {
+    /// The paste transaction already handled the clipboard, or another process may have changed it.
+    case preserve
+    /// No clipboard operation was performed; write only if this change count is still current.
+    case writeIfUnchanged(changeCount: Int)
 }
 
 /// What one injection method achieved.
 public enum InjectionAttempt: Equatable, Sendable {
-    /// The text demonstrably arrived.
+    /// Accessibility read-back shows arrival, or a process read the clipboard during a paste.
     case delivered
     /// The text demonstrably did not arrive (the field reads back unchanged), so another method is safe.
     case notDelivered
     /// Something was sent that may still arrive. Trying another method could insert the text twice.
-    case uncertain
+    case uncertain(clipboard: ClipboardFallback)
 }
 
 /// The platform operations that `InjectionChain` calls.
@@ -77,15 +87,14 @@ public enum InjectionOutcome: Equatable, Sendable {
     case noEditableFocus
     /// Focus moved away from the original target before the text could be delivered.
     case targetChanged
-    /// No method could confirm delivery. Not every path leaves the transcript on the clipboard, so the caller places it
-    /// there.
-    case unconfirmed
+    /// No method could confirm delivery. The clipboard policy preserves any newer copy.
+    case unconfirmed(clipboard: ClipboardFallback)
     /// The delivering task was cancelled before a method started.
     case cancelled
 }
 
 public enum InjectionChain {
-    /// Tries each method in order until one confirms delivery. The next method runs only after a method demonstrably
+    /// Tries each method in order until one reports delivery. The next method runs only after a method demonstrably
     /// did not deliver. Once a method may have worked, the chain stops with `.unconfirmed`, because another method
     /// could insert the text twice. The chain checks before every attempt that the original target still has focus, so
     /// no attempt starts against a different element.
@@ -95,7 +104,8 @@ public enum InjectionChain {
         switch decision {
         case .refuseSecureField: return .refusedSecureField
         case .noEditableFocus: return .noEditableFocus
-        case .attempt(let planned): methods = planned
+        case .accessibilityThenPaste: methods = [.accessibilityInsertion, .paste]
+        case .paste: methods = [.paste]
         }
         for method in methods {
             // Escape cancels the delivering task. A cancelled task starts no further method.
@@ -108,10 +118,13 @@ public enum InjectionChain {
             }
             switch attempt {
             case .delivered: return .inserted(method)
-            case .notDelivered: continue
-            case .uncertain: return .unconfirmed
+            case .notDelivered:
+                if method == .paste { return .unconfirmed(clipboard: .preserve) }
+                continue
+            case .uncertain(let clipboard):
+                return .unconfirmed(clipboard: method == .paste ? .preserve : clipboard)
             }
         }
-        return .unconfirmed
+        return .unconfirmed(clipboard: .preserve)
     }
 }

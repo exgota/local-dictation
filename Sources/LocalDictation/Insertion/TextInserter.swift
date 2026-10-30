@@ -116,7 +116,7 @@ enum Accessibility {
     }
 
     /// Probes the target's focused element, then inserts `text`. Text is never sent to a different element.
-    /// `onLanded` runs as soon as the text is in the target, which for a paste is before the clipboard is restored.
+    /// `onLanded` runs after Accessibility confirms arrival, or on the first clipboard read before the clipboard is restored.
     static func insert(
         _ text: String, into target: InsertionTarget, onLanded: @escaping @MainActor () -> Void = {}
     ) async -> InjectionOutcome {
@@ -177,23 +177,27 @@ enum Accessibility {
 
     /// Checks the field every 20 ms until it shows that `text` arrived or `timeout` passes. Not delivered only when the
     /// field is readable and still exactly as before. Uncertain otherwise.
-    private func confirm(_ text: String, since before: FieldState, timeout: TimeInterval) async -> InjectionAttempt {
+    private func confirm(
+        _ text: String, since before: FieldState, timeout: TimeInterval, clipboardChangeCount: Int
+    ) async -> InjectionAttempt {
         let deadline = monotonicSeconds() + timeout
         while true {
             if showsArrival(of: text, since: before) { return .delivered }
             if monotonicSeconds() >= deadline { break }
             try? await Task.sleep(nanoseconds: 20_000_000)
         }
-        return before.isReadable && fieldState() == before ? .notDelivered : .uncertain
+        return before.isReadable && fieldState() == before
+            ? .notDelivered : .uncertain(clipboard: .writeIfUnchanged(changeCount: clipboardChangeCount))
     }
 
     /// Sets `AXSelectedText` and reads the field back for up to 0.5 s. Some web views accept the call without
     /// inserting; their field reads back unchanged, so the chain can then try paste without inserting twice.
     func insertViaAccessibility(_ text: String) async -> InjectionAttempt {
+        let clipboardChangeCount = NSPasteboard.general.changeCount
         let before = fieldState()
         guard AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success
         else { return .notDelivered }
-        let attempt = await confirm(text, since: before, timeout: 0.5)
+        let attempt = await confirm(text, since: before, timeout: 0.5, clipboardChangeCount: clipboardChangeCount)
         switch attempt {
         case .delivered: onLanded()
         case .notDelivered: Self.applicationsIgnoringAccessibilityInsertion.insert(target.applicationKey)
@@ -202,7 +206,7 @@ enum Accessibility {
         return attempt
     }
 
-    /// Pastes through the clipboard. Delivered when the target read the clipboard; otherwise uncertain. Where the field
+    /// Pastes through the clipboard. Delivered when a process read the clipboard; otherwise uncertain. Where the field
     /// is readable, the previous clipboard is restored as soon as the field shows the text.
     func paste(_ text: String) async -> InjectionAttempt {
         let before = fieldState()
@@ -213,10 +217,12 @@ enum Accessibility {
         switch outcome {
         case .landed:
             return .delivered
+        case .writeFailed:
+            return .notDelivered
         case .notRead:
             // The posted Command-V may still be handled late, so the transcript stays on the clipboard (never the
             // previous contents, which a late paste would insert) and nothing else is tried.
-            return .uncertain
+            return .uncertain(clipboard: .preserve)
         }
     }
 
@@ -233,6 +239,12 @@ enum Accessibility {
     static func placeOnClipboard(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    static func placeOnClipboardIfUnchanged(_ text: String, since changeCount: Int) {
+        let pasteboard = NSPasteboard.general
+        guard pasteboard.changeCount == changeCount, pasteboard.string(forType: .string) != text else { return }
+        placeOnClipboard(text)
     }
 
     /// Adds a separating space when the text starts with a character that is neither whitespace nor punctuation and the
@@ -277,16 +289,18 @@ enum Accessibility {
         if !snapshot.isEmpty { pasteboard.writeObjects(snapshot) }
     }
 
-    func writeOnDemand(_ text: String, onRead: @escaping @MainActor () -> Void) {
+    func writeOnDemand(_ text: String, onRead: @escaping @MainActor () -> Void) -> (succeeded: Bool, changeCount: Int) {
         onDemandText = text
         self.onRead = onRead
-        pasteboard.clearContents()
+        let changeCount = pasteboard.clearContents()
         let item = NSPasteboardItem()
         item.setDataProvider(self, forTypes: [.string])
         // Clipboard managers that honor the nspasteboard.org conventions skip transient entries without reading them.
         item.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
         item.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.AutoGeneratedType"))
-        pasteboard.writeObjects([item])
+        let succeeded = pasteboard.writeObjects([item])
+        if !succeeded { onDemandText = nil; self.onRead = nil }
+        return (succeeded, changeCount)
     }
 
     func writePlainText(_ text: String) {

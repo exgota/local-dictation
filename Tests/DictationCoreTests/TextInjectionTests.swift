@@ -19,24 +19,24 @@ final class InjectionPlannerTests: XCTestCase {
 
     func testAccessibilityInsertionFirstWhenSupported() {
         let element = FocusedElementDescription(isSecure: false, isEditable: true, acceptsSelectedTextInsertion: true, isValueReadable: true)
-        XCTAssertEqual(InjectionPlanner.decide(for: element), .attempt([.accessibilityInsertion, .paste]))
+        XCTAssertEqual(InjectionPlanner.decide(for: element), .accessibilityThenPaste)
     }
 
     func testPasteFirstWhenValueUnreadable() {
         let element = FocusedElementDescription(
             isSecure: false, isEditable: true, acceptsSelectedTextInsertion: true, isValueReadable: false)
-        XCTAssertEqual(InjectionPlanner.decide(for: element), .attempt([.paste]))
+        XCTAssertEqual(InjectionPlanner.decide(for: element), .paste)
     }
 
     func testPasteFirstWhereApplicationIgnoredAccessibilityInsertion() {
         let element = FocusedElementDescription(isSecure: false, isEditable: true, acceptsSelectedTextInsertion: true, isValueReadable: true)
         XCTAssertEqual(
-            InjectionPlanner.decide(for: element, applicationIgnoresAccessibilityInsertion: true), .attempt([.paste]))
+            InjectionPlanner.decide(for: element, applicationIgnoresAccessibilityInsertion: true), .paste)
     }
 
     func testPasteFirstWithoutSelectedTextInsertion() {
         let element = FocusedElementDescription(isSecure: false, isEditable: true, acceptsSelectedTextInsertion: false, isValueReadable: true)
-        XCTAssertEqual(InjectionPlanner.decide(for: element), .attempt([.paste]))
+        XCTAssertEqual(InjectionPlanner.decide(for: element), .paste)
     }
 }
 
@@ -62,7 +62,7 @@ final class InjectionPlannerTests: XCTestCase {
         }
     }
 
-    private let all: InjectionDecision = .attempt([.accessibilityInsertion, .paste])
+    private let all: InjectionDecision = .accessibilityThenPaste
 
     func testStopsAtFirstConfirmedMethod() async {
         let spy = SpyInjector()
@@ -75,8 +75,15 @@ final class InjectionPlannerTests: XCTestCase {
     func testPasteLanded() async {
         let spy = SpyInjector()
         spy.pasteResult = .delivered
-        let outcome = await InjectionChain.run("hello", decision: .attempt([.paste]), injector: spy)
+        let outcome = await InjectionChain.run("hello", decision: .paste, injector: spy)
         XCTAssertEqual(outcome, .inserted(.paste))
+    }
+
+    func testPasteOnlyPlanDoesNotRetryAfterFailure() async {
+        let spy = SpyInjector()
+        let outcome = await InjectionChain.run("hello", decision: .paste, injector: spy)
+        XCTAssertEqual(outcome, .unconfirmed(clipboard: .preserve))
+        XCTAssertEqual(spy.calls, ["focus", "paste:hello"])
     }
 
     func testFocusLossStopsChainBeforeNextMethod() async {
@@ -119,16 +126,23 @@ final class InjectionPlannerTests: XCTestCase {
 
     func testUncertainAccessibilityInsertionStopsBeforePaste() async {
         let spy = SpyInjector()
-        spy.accessibilityResult = .uncertain
+        spy.accessibilityResult = .uncertain(clipboard: .writeIfUnchanged(changeCount: 42))
         let outcome = await InjectionChain.run("hello", decision: all, injector: spy)
-        XCTAssertEqual(outcome, .unconfirmed)
+        XCTAssertEqual(outcome, .unconfirmed(clipboard: .writeIfUnchanged(changeCount: 42)))
         XCTAssertEqual(spy.calls, ["focus", "accessibility:hello"])
+    }
+
+    func testUnconfirmedPastePreservesClipboardForFallback() async {
+        let spy = SpyInjector()
+        spy.pasteResult = .uncertain(clipboard: .writeIfUnchanged(changeCount: 42))
+        let outcome = await InjectionChain.run("hello", decision: .paste, injector: spy)
+        XCTAssertEqual(outcome, .unconfirmed(clipboard: .preserve))
     }
 
     func testAllMethodsFailingIsUnconfirmed() async {
         let spy = SpyInjector()
         let outcome = await InjectionChain.run("hello", decision: all, injector: spy)
-        XCTAssertEqual(outcome, .unconfirmed)
+        XCTAssertEqual(outcome, .unconfirmed(clipboard: .preserve))
     }
 }
 
@@ -138,6 +152,8 @@ final class InjectionPlannerTests: XCTestCase {
     final class FakePasteboard: PasteboardAccessing {
         var changeCount = 0
         var contents: [String] = ["original", "original-rich"]
+        var failsWrite = false
+        var afterFailedWrite: (() -> Void)?
         private var onDemandText: String?
         private var onRead: (@MainActor () -> Void)?
 
@@ -146,11 +162,18 @@ final class InjectionPlannerTests: XCTestCase {
             changeCount += 1
             contents = snapshot
         }
-        func writeOnDemand(_ text: String, onRead: @escaping @MainActor () -> Void) {
+        func writeOnDemand(_ text: String, onRead: @escaping @MainActor () -> Void) -> (succeeded: Bool, changeCount: Int) {
             changeCount += 1
+            let ownChangeCount = changeCount
+            contents = []
+            if failsWrite {
+                afterFailedWrite?()
+                return (false, ownChangeCount)
+            }
             contents = ["(on demand)"]
             onDemandText = text
             self.onRead = onRead
+            return (true, ownChangeCount)
         }
         func writePlainText(_ text: String) {
             changeCount += 1
@@ -178,6 +201,27 @@ final class InjectionPlannerTests: XCTestCase {
             clock: { ProcessInfo.processInfo.systemUptime })
     }
 
+    func testFailedWriteRestoresClipboardWithoutPostingPaste() async {
+        let pasteboard = FakePasteboard()
+        pasteboard.failsWrite = true
+        var posted = false
+        let outcome = await transaction(pasteboard).paste("transcript") { posted = true }
+        XCTAssertEqual(outcome, .writeFailed)
+        XCTAssertFalse(posted)
+        XCTAssertEqual(pasteboard.contents, ["original", "original-rich"])
+    }
+
+    func testFailedWriteDoesNotOverwriteNewerClipboard() async {
+        let pasteboard = FakePasteboard()
+        pasteboard.failsWrite = true
+        pasteboard.afterFailedWrite = { pasteboard.externalWrite("copied by the user") }
+        var posted = false
+        let outcome = await transaction(pasteboard).paste("transcript") { posted = true }
+        XCTAssertEqual(outcome, .writeFailed)
+        XCTAssertFalse(posted)
+        XCTAssertEqual(pasteboard.contents, ["copied by the user"])
+    }
+
     func testRestoresOnlyAfterSlowTargetReads() async {
         let pasteboard = FakePasteboard()
         var pasted: String?
@@ -195,6 +239,23 @@ final class InjectionPlannerTests: XCTestCase {
         XCTAssertEqual(pasteboard.contents, ["original", "original-rich"])
     }
 
+    func testCancelledPasteStillWaitsForReadAndRestoresClipboard() async {
+        let pasteboard = FakePasteboard()
+        var task: Task<PasteOutcome, Never>?
+        task = Task { @MainActor in
+            await transaction(pasteboard).paste("transcript") {
+                Task { @MainActor in
+                    task?.cancel()
+                    try? await Task.sleep(nanoseconds: 20_000_000)
+                    _ = pasteboard.read()
+                }
+            }
+        }
+        let outcome = await task?.value
+        XCTAssertEqual(outcome, .landed)
+        XCTAssertEqual(pasteboard.contents, ["original", "original-rich"])
+    }
+
     func testTranscriptKeptWhenNothingReads() async {
         let pasteboard = FakePasteboard()
         let outcome = await transaction(pasteboard).paste("transcript") {}
@@ -209,6 +270,15 @@ final class InjectionPlannerTests: XCTestCase {
             pasteboard.externalWrite("copied by the user")
         }
         XCTAssertEqual(outcome, .landed)
+        XCTAssertEqual(pasteboard.contents, ["copied by the user"])
+    }
+
+    func testNoTranscriptWriteWhenAnotherApplicationWroteBeforeTimeout() async {
+        let pasteboard = FakePasteboard()
+        let outcome = await transaction(pasteboard).paste("transcript") {
+            pasteboard.externalWrite("copied by the user")
+        }
+        XCTAssertEqual(outcome, .notRead)
         XCTAssertEqual(pasteboard.contents, ["copied by the user"])
     }
 

@@ -1,9 +1,11 @@
 import Foundation
 
 public enum PasteOutcome: Equatable, Sendable {
-    /// The target read the clipboard after Command-V. The previous clipboard is restored, unless another process wrote
+    /// A process read the clipboard. The previous clipboard is restored, unless another process wrote
     /// to the clipboard in the meantime.
     case landed
+    /// The transcript could not be written, so no paste shortcut was posted.
+    case writeFailed
     /// No process read the clipboard within `readTimeout`. The transcript is left on the clipboard as plain text,
     /// unless another process wrote to the clipboard in the meantime.
     case notRead
@@ -17,14 +19,13 @@ public enum PasteOutcome: Equatable, Sendable {
     /// Copies every item and type currently on the clipboard.
     func takeSnapshot() -> Snapshot
     func restore(_ snapshot: Snapshot)
-    /// Puts `text` on the clipboard as data supplied on demand. `onRead` runs whenever a process reads it.
-    func writeOnDemand(_ text: String, onRead: @escaping @MainActor () -> Void)
+    /// Puts `text` on the clipboard as data supplied on demand. `onRead` runs when a process first reads it.
+    func writeOnDemand(_ text: String, onRead: @escaping @MainActor () -> Void) -> (succeeded: Bool, changeCount: Int)
     func writePlainText(_ text: String)
 }
 
 /// Pastes a transcript through the clipboard: takes a snapshot of the clipboard, writes the transcript, posts
-/// Command-V, and restores the snapshot once the paste is observed to have landed. A blind timer never triggers the
-/// restore.
+/// Command-V, and restores the snapshot after a read, subject to the conditions below.
 ///
 /// The transcript is offered as on-demand clipboard data. The first process to read it calls back into this process,
 /// and that callback is the first sign of a paste. Later reads are served from the clipboard's copy without a callback,
@@ -69,29 +70,43 @@ public enum PasteOutcome: Equatable, Sendable {
     ) async -> PasteOutcome {
         let snapshot = pasteboard.takeSnapshot()
         var firstRead: TimeInterval?
-        pasteboard.writeOnDemand(text) { [clock] in
+        let write = pasteboard.writeOnDemand(text) { [clock] in
             if firstRead == nil { firstRead = clock() }
         }
-        let ownChangeCount = pasteboard.changeCount
+        let ownChangeCount = write.changeCount
+        guard write.succeeded else {
+            if pasteboard.changeCount == ownChangeCount { pasteboard.restore(snapshot) }
+            return .writeFailed
+        }
         let start = clock()
         postPasteShortcut()
 
         while firstRead == nil && clock() - start < timing.readTimeout {
             await sleep(timing.pollInterval)
         }
-        guard let firstRead else {
-            if pasteboard.changeCount == ownChangeCount { pasteboard.writePlainText(text) }
-            return .notRead
+        let outcome: PasteOutcome
+        if let firstRead {
+            onLanded()
+            while clock() - firstRead < timing.restoreDelay && !showsText() {
+                await sleep(timing.pollInterval)
+            }
+            outcome = .landed
+        } else {
+            outcome = .notRead
         }
-        onLanded()
-        while clock() - firstRead < timing.restoreDelay && !showsText() {
-            await sleep(timing.pollInterval)
+        if pasteboard.changeCount == ownChangeCount {
+            switch outcome {
+            case .landed: pasteboard.restore(snapshot)
+            case .notRead: pasteboard.writePlainText(text)
+            case .writeFailed: break
+            }
         }
-        if pasteboard.changeCount == ownChangeCount { pasteboard.restore(snapshot) }
-        return .landed
+        return outcome
     }
 
     private func sleep(_ seconds: TimeInterval) async {
-        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        await Task.detached {
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        }.value
     }
 }

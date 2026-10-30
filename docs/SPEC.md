@@ -23,7 +23,7 @@ October 26, 2026.
 | Word error rate (word-level edit distance divided by the number of reference words) | 0.58 % on a 5.5 min live recording played through a speaker into the microphone; 0.81 to 2.11 % on recordings fed to the streaming pipeline | [measurements/streaming-benchmark.txt](measurements/streaming-benchmark.txt) |
 | Memory (physical footprint, the figure Activity Monitor shows) | 96 MB idle with the model loaded; 49 to 53 MB peak in the streaming benchmark for 3 and 16 minute inputs | [measurements/streaming-benchmark.txt](measurements/streaming-benchmark.txt) |
 | Idle CPU | 0.0 % | [measurements/streaming-benchmark.txt](measurements/streaming-benchmark.txt) |
-| Tests | 149 unit tests pass; self-test 11 of 12 synthetic fixtures | [measurements/selftest.txt](measurements/selftest.txt) |
+| Tests | 180 unit tests pass; self-test 11 of 12 synthetic fixtures | [measurements/selftest.txt](measurements/selftest.txt) |
 
 ## Architecture
 
@@ -35,7 +35,7 @@ flowchart LR
   Capture -->|samples| Stream[StreamingTranscription worker]
   Stream --> VAD[Silero VAD, CPU, 256 ms frames]
   VAD --> Planner[SpeechChunkPlanner]
-  Planner -->|chunks up to 14.5 s| ASR[SpeechTranscriber: Bark on Core ML]
+  Planner -->|cores with guards, up to 14.782 s| ASR[SpeechTranscriber: Bark on Core ML]
   ASR --> Text[TranscriptPipeline: profile, corrections]
   Text --> Insert[TextInserter: AX insert, then paste]
   Insert --> App[Focused app]
@@ -52,7 +52,7 @@ Silero is the VAD model and Bark is the speech model.
 | `DictationEngine` | Model download, validation, compilation, transcription, VAD, streaming | `ModelManifest.swift`, `ModelStore.swift`, `SpeechTranscriber.swift`, `StreamingTranscription.swift` |
 | `TextProcessing` | Deterministic text cleanup and per-app profiles | `TranscriptProcessor.swift`, `VocabularyCorrections.swift`, `TranscriptProfile.swift` |
 | `TranscriptHistory` | SQLite history | `TranscriptHistoryStore.swift` |
-| `LocalDictation` | The app: controller, event tap, audio capture, text insertion, interface | `DictationController.swift`, `HotkeyEventTap.swift`, `AudioRecorder.swift`, `TextInserter.swift`, `SettingsWindow.swift`, `HeadsUpDisplay.swift` |
+| `LocalDictation` | The app: controller, event tap, audio capture, text insertion, interface | `Session/DictationController.swift`, `Hotkeys/HotkeyEventTap.swift`, `Recording/AudioRecorder.swift`, `Insertion/TextInserter.swift`, `Settings/SettingsWindow.swift`, `Display/HeadsUpDisplay.swift` |
 
 ### Threads
 
@@ -73,14 +73,22 @@ Silero is the VAD model and Bark is the speech model.
    display). The start cue plays once the microphone delivers its first samples, so speech after the cue is never
    clipped. The microphone is on from this step until step 5.
 3. The capture queue passes samples to the streaming worker, which cuts them into frames of 4096 samples (256 ms).
-   Silero gives each frame a speech probability. `SpeechChunkPlanner` groups frames into chunks. It drops leading
-   silence, and once a chunk holds 31 frames (about 8 s) it cuts at the next pause, which is a frame with a speech
-   probability below 0.35. A chunk never exceeds 14.5 s: at 56 frames (14.3 s) the planner cuts at the least
-   speech-like of the last 12 frames.
-4. The worker transcribes each chunk as soon as it is cut. When transcription keeps pace with speech, only the last
-   chunk remains to be transcribed when the user stops, even after a 10-minute dictation.
-5. The user presses Fn again. Capture stops, the planner trims trailing silence from the last chunk, and the worker
-   transcribes it. Recordings under 0.3 s are dropped without transcription, so a stray tap of Fn does nothing and Fn's
+   Silero gives each frame a speech probability. `SpeechChunkPlanner` groups frames into cores and drops leading
+   silence. Once a core holds 31 frames (about 8 s), two consecutive frames below the 0.35 continuation threshold
+   propose a cut. At 42 frames (about 10.8 s), one such frame is enough. At 47 frames (12.032 s), a forced cut uses the
+   least speech-like of the last 12 frames. The worker searches the proposed gap in 40 ms energy windows and cuts at
+   its quietest point, retaining the remaining samples for the next core. For a forced cut in speech, the search also
+   covers the frames adjacent to the least speech-like frame.
+4. The worker transcribes each core with up to 1.25 s of preceding audio and 1.25 s of following audio as guards. The
+   first core has no left guard. A mid-recording cut waits for its right guard; at stop, any pending core includes the
+   audio already received after its cut and is transcribed without waiting. The worker keeps a whole word only when the
+   first token's timestamp falls inside the core, accounting for the leading silence and left guard. If adjacent decodes
+   place one word on both sides of a cut, the second copy is dropped. If both leave it out, it is restored. It rebuilds
+   text from the selected tokens. If token timings are unavailable, it keeps the full chunk text. When transcription
+   keeps pace with speech, only the last chunk remains to be transcribed when the user stops, even after a 10-minute
+   dictation.
+5. The user presses Fn again. Capture stops, the planner trims trailing silence from the last core when no cut is
+   pending, and the worker transcribes it. Recordings under 0.3 s are dropped without transcription, so a stray tap of Fn does nothing and Fn's
    own shortcuts keep working.
 6. `TranscriptPipeline` applies the profile of the target app (see Text processing). `TextInserter` then checks that the
    same element still has focus and inserts the text.
@@ -118,8 +126,9 @@ output length. The table lists the components in execution order.
 [model/official-runner/](model/official-runner/).
 
 - The app prepends 0.25 s of silence to every chunk, as the official runner does.
-- `short8` takes audio of up to 8 s including that padding (128,000 samples). `full15` takes longer audio. A chunk never
-  exceeds 14.5 s (the planner limit is 56 frames of 256 ms, which is 14.3 s), so `full15` always receives a single
+- `short8` takes audio of up to 8 s including that padding (128,000 samples). `full15` takes longer audio. A core of up
+  to 47 frames (12.032 s), two guards of up to 1.25 s each, and the leading silence total at most 14.782 s. At stop, a
+  pending core can extend into its received right guard, without increasing that total, so `full15` receives a single
   window.
 - Decoding is greedy TDT (token and duration): no beam search, no vocabulary biasing, English only. Each chunk starts
   with a fresh decoder state.
@@ -187,7 +196,8 @@ point and character count, and the full value only once one of them has changed,
 full every 20 ms.
 
 Paste writes the transcript to the clipboard as on-demand pasteboard data (`NSPasteboardItemDataProvider`), which calls
-back into the app when a process reads it, and then posts Cmd-V. The read confirms the paste. macOS calls back only for
+back into the app when a process reads it, and then posts Cmd-V. If the write fails, the app posts no shortcut and
+restores the previous contents if it still owns the clipboard. The read confirms the paste. macOS calls back only for
 the first read and serves later reads from its own copy, so a clipboard manager that reads first hides the target's
 read. The app therefore restores the user's previous clipboard once the field shows the text, or 1 s after the first
 read where the field cannot be read, unless another process wrote to the clipboard in the meantime. If no process reads the data within 1.5 s, the Cmd-V may still be
@@ -289,7 +299,7 @@ or read the report through the socket.
 
 ## Testing
 
-- `swift test` runs 155 unit tests. They cover the hotkey state machine driven by synthetic key events, the clipboard
+- `swift test` runs 180 unit tests. They cover the hotkey state machine driven by synthetic key events, the clipboard
   transaction against a slow fake target, the injection chain with a spy, chunk boundaries from voice activity, the text
   steps, corrections, profiles, the cleanup client against a stubbed server, and history.
 - `--selftest` runs WAV fixtures through the real pipeline and checks three things. The word error rate must be at most

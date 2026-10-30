@@ -38,9 +38,8 @@ public struct StreamingTranscriptionResult: Sendable {
 }
 
 /// Transcribes while recording. The audio thread passes samples to `append`. One worker runs voice activity detection,
-/// cuts chunks of at most 56 frames (14.336 s) at pauses, and transcribes each chunk as soon as it is cut. The worker
-/// retains only the audio of the current chunk. Samples that arrive while a chunk is transcribed wait in an unbounded
-/// stream, so memory stays flat however long the recording runs, provided transcription keeps pace with the audio. At
+/// cuts chunks at pauses and transcribes them with adjacent audio for context. Samples that arrive while a chunk is
+/// transcribed wait in an unbounded stream, so memory stays flat provided transcription keeps pace with the audio. At
 /// the end, only the last chunk remains to be transcribed.
 public final class StreamingTranscription: Sendable {
     public struct Activity: Sendable {
@@ -49,7 +48,7 @@ public final class StreamingTranscription: Sendable {
     }
 
     /// The last chunk can need `full15` only after about 8 s of audio, so its warm-up starts at 5 s.
-    static let longFunctionWarmUpSamples = 5 * 16_000
+    static let longFunctionWarmUpSamples = 5 * SpeechAudioFormat.sampleRate
 
     private let continuation: AsyncStream<[Float]>.Continuation
     private let ended = OSAllocatedUnfairLock<TimeInterval?>(initialState: nil)
@@ -93,8 +92,10 @@ public final class StreamingTranscription: Sendable {
         var planner = SpeechChunkPlanner()
         var state = await voiceActivity.initialState()
         var pending: [Float] = []
-        var retained: [Float] = []
+        var retained = SpeechChunkBuffer(maximumChunkFrames: planner.configuration.maximumChunkFrames)
+        var guardBands = SpeechGuardBandBuffer()
         var texts: [String] = []
+        var previousSelection: TranscriptCoreSelector.Selection?
         var totalSamples = 0
         var transcribedSamples = 0
         var chunkCount = 0
@@ -105,38 +106,58 @@ public final class StreamingTranscription: Sendable {
         Task.detached(priority: .userInitiated) { await transcriber.warmUp(longFunction: false) }
         var warmedLongFunction = false
 
+        func transcribe(_ chunk: SpeechGuardBandBuffer.Chunk) async throws {
+            try Task.checkCancellation()
+            let outcome: TranscriptionOutcome
+            do {
+                outcome = try await transcriber.transcribe(chunk.samples)
+            } catch TranscriptionError.audioTooShort {
+                // A sliver left after a cut holds no word. Skip it, because rethrowing would lose every earlier chunk.
+                return
+            }
+            if ended.withLock({ $0 }) != nil { processingAfterEnd += outcome.processingSeconds }
+            chunkCount += 1
+            transcribedSamples += chunk.coreRange.count
+            let sampleRate = Double(SpeechAudioFormat.sampleRate)
+            let offset = Double(SpeechTranscriber.leadingSilenceSamples) / sampleRate
+            // With no guard on a side, the core reaches the edge of the decoded audio. A word at the very start can be
+            // timed inside the leading silence, and one at the very end past the last sample.
+            let coreStart = chunk.coreRange.lowerBound == 0 ? 0 : offset + Double(chunk.coreRange.lowerBound) / sampleRate
+            let coreEnd = chunk.coreRange.upperBound == chunk.samples.count
+                ? TimeInterval.infinity : offset + Double(chunk.coreRange.upperBound) / sampleRate
+            let core = coreStart..<coreEnd
+            let tokens = outcome.tokenTimings?.map { TranscriptCoreSelector.Token(piece: $0.token, startTime: $0.startTime) }
+            let selection = TranscriptCoreSelector.reconcilingSeam(
+                TranscriptCoreSelector.select(text: outcome.text, tokens: tokens, core: core), after: previousSelection)
+            let text = selection.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return }
+            texts.append(text)
+            previousSelection = selection
+        }
+
         func apply(_ commands: [SpeechChunkPlanner.Command]) async throws {
             for command in commands {
                 switch command {
+                case .cut(let cut):
+                    let selected = retained.cut(cut)
+                    planner.completeCut(frameCount: selected.frameCount)
+                    guardBands.schedule(core: selected.samples, following: retained.prefix(SpeechGuardBandBuffer.rightGuardSampleCount))
                 case .emit(let frames):
-                    let count = min(frames * frameSize, retained.count)
-                    let chunk = Array(retained.prefix(count))
-                    retained.removeFirst(count)
-                    try Task.checkCancellation()
-                    let outcome: TranscriptionOutcome
-                    do {
-                        outcome = try await transcriber.transcribe(chunk)
-                    } catch TranscriptionError.audioTooShort {
-                        // A sliver left after a cut holds no word. Skip it, because rethrowing would lose every earlier
-                        // chunk.
-                        continue
-                    }
-                    if ended.withLock({ $0 }) != nil { processingAfterEnd += outcome.processingSeconds }
-                    chunkCount += 1
-                    transcribedSamples += count
-                    let text = outcome.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !text.isEmpty { texts.append(text) }
+                    try await transcribe(guardBands.finalChunk(core: retained.take(frameCount: frames)))
                 case .discard(let frames):
-                    retained.removeFirst(min(frames * frameSize, retained.count))
+                    guardBands.discard(retained.discard(frameCount: frames))
                 }
             }
         }
 
-        func process(frame: [Float], sampleCount: Int) async throws {
+        func process(frame: [Float], sampleCount: Int, allowCut: Bool = true) async throws {
             let (probability, nextState) = try await voiceActivity.speechProbability(of: frame, state: state)
             state = nextState
-            retained.append(contentsOf: frame.prefix(sampleCount))
-            try await apply(planner.addFrame(speechProbability: probability))
+            let realSamples = frame.prefix(sampleCount)
+            guardBands.appendFollowing(realSamples)
+            retained.append(contentsOf: realSamples)
+            try await apply(planner.addFrame(speechProbability: probability, allowCut: allowCut))
+            if let ready = guardBands.takeReady() { try await transcribe(ready) }
             onActivity(Activity(hasDetectedSpeech: planner.hasDetectedSpeech, trailingSilence: planner.trailingSilenceDuration))
         }
 
@@ -157,12 +178,25 @@ public final class StreamingTranscription: Sendable {
         try Task.checkCancellation()
         if !pending.isEmpty {
             // The final partial frame is padded with silence for voice activity only. Only its real samples are kept.
-            try await process(frame: pending + [Float](repeating: 0, count: frameSize - pending.count), sampleCount: pending.count)
+            try await process(
+                frame: pending + [Float](repeating: 0, count: frameSize - pending.count), sampleCount: pending.count,
+                allowCut: false)
         }
-        try await apply(planner.finish())
+        let finalCommands = planner.finish()
+        if let final = guardBands.takeFinalPending() {
+            try await transcribe(final)
+            for command in finalCommands {
+                switch command {
+                case .emit(let frames), .discard(let frames): retained.discard(frameCount: frames)
+                case .cut: preconditionFailure("Unexpected final cut")
+                }
+            }
+        } else {
+            try await apply(finalCommands)
+        }
         return StreamingTranscriptionResult(
-            text: texts.joined(separator: " "), audioSeconds: Double(totalSamples) / 16_000,
-            transcribedSeconds: Double(transcribedSamples) / 16_000, chunkCount: chunkCount,
+            text: texts.joined(separator: " "), audioSeconds: Double(totalSamples) / Double(SpeechAudioFormat.sampleRate),
+            transcribedSeconds: Double(transcribedSamples) / Double(SpeechAudioFormat.sampleRate), chunkCount: chunkCount,
             processingSecondsAfterEnd: processingAfterEnd)
     }
 }

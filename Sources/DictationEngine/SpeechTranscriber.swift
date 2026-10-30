@@ -1,4 +1,5 @@
 import CoreML
+import DictationCore
 import FluidAudio
 import Foundation
 
@@ -28,6 +29,7 @@ public enum TranscriptionError: LocalizedError {
 
 public struct TranscriptionOutcome: Sendable {
     public let text: String
+    public let tokenTimings: [TokenTiming]?
     public let encoderFunction: String
     public let audioSeconds: Double
     public let processingSeconds: Double
@@ -39,9 +41,10 @@ public struct TranscriptionOutcome: Sendable {
 /// handling; the preprocessor, decoder and joint on the CPU; and greedy decoding with no biasing or language filtering.
 /// The encoder runs on the compute units that `EncoderComputeTarget` selects.
 public actor SpeechTranscriber {
-    public static let sampleRate = 16_000
-    static let leadingSilenceSamples = 4_000
-    static let shortFunctionLimitSamples = 128_000
+    static let leadingSilenceSamples = SpeechAudioFormat.sampleRate / 4
+    static let shortFunctionLimitSamples = SpeechAudioFormat.sampleRate * 8
+    private static let shortFunctionName = "short8"
+    private static let fullFunctionName = "full15"
 
     private let compiledDirectory: URL
     private let vocabularyURL: URL
@@ -63,8 +66,8 @@ public actor SpeechTranscriber {
     public func load() throws {
         if isLoaded { return }
         let shared = try loadSharedComponents()
-        shortManager = try makeManager(function: "short8", shared: shared)
-        fullManager = try makeManager(function: "full15", shared: shared)
+        shortManager = try makeManager(function: Self.shortFunctionName, shared: shared)
+        fullManager = try makeManager(function: Self.fullFunctionName, shared: shared)
     }
 
     public func unload() {
@@ -78,7 +81,7 @@ public actor SpeechTranscriber {
         var padded = [Float](repeating: 0, count: Self.leadingSilenceSamples)
         padded.reserveCapacity(samples.count + Self.leadingSilenceSamples)
         padded.append(contentsOf: samples)
-        guard padded.count >= ASRConstants.minimumRequiredSamples(forSampleRate: Self.sampleRate) else {
+        guard padded.count >= ASRConstants.minimumRequiredSamples(forSampleRate: SpeechAudioFormat.sampleRate) else {
             throw TranscriptionError.audioTooShort
         }
         let useShort = padded.count <= Self.shortFunctionLimitSamples
@@ -87,9 +90,9 @@ public actor SpeechTranscriber {
         var state = try TdtDecoderState()
         let result = try await manager.transcribe(padded, decoderState: &state)
         return TranscriptionOutcome(
-            text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
-            encoderFunction: useShort ? "short8" : "full15",
-            audioSeconds: Double(samples.count) / Double(Self.sampleRate),
+            text: result.text.trimmingCharacters(in: .whitespacesAndNewlines), tokenTimings: result.tokenTimings,
+            encoderFunction: useShort ? Self.shortFunctionName : Self.fullFunctionName,
+            audioSeconds: Double(samples.count) / Double(SpeechAudioFormat.sampleRate),
             processingSeconds: Date().timeIntervalSince(start))
     }
 
@@ -99,7 +102,7 @@ public actor SpeechTranscriber {
     /// `short8` (1 s of silence). Errors are ignored.
     public func warmUp(longFunction: Bool) async {
         let seconds = longFunction ? 10 : 1
-        _ = try? await transcribe([Float](repeating: 0, count: Self.sampleRate * seconds))
+        _ = try? await transcribe([Float](repeating: 0, count: SpeechAudioFormat.sampleRate * seconds))
     }
 
     private func loadSharedComponents() throws -> (preprocessor: MLModel, decoder: MLModel, joint: MLModel, vocabulary: [Int: String]) {

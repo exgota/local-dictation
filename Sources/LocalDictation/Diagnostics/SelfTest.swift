@@ -1,3 +1,4 @@
+import DictationCore
 import AVFoundation
 import DictationEngine
 import Foundation
@@ -46,7 +47,7 @@ enum SelfTest {
         do {
             try await transcriber.load()
             voiceActivity = try VoiceActivityDetector(compiledModelURL: store.voiceActivityModelURL)
-            _ = try await transcriber.transcribe([Float](repeating: 0, count: 16_000))
+            _ = try await transcriber.transcribe([Float](repeating: 0, count: SpeechAudioFormat.sampleRate))
         } catch {
             print("The speech model could not be loaded: \(error.localizedDescription)")
             return 2
@@ -104,7 +105,7 @@ enum SelfTest {
         guard let source = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: sourceFrames) else { throw SelfTestError.unreadable }
         try file.read(into: source)
         let samples = try resampleToSpeechFormat(source)
-        let audioSeconds = Double(samples.count) / 16_000
+        let audioSeconds = Double(samples.count) / Double(SpeechAudioFormat.sampleRate)
         let category = category(of: identifier)
         let number = Int(identifier.prefix(2)) ?? 0
 
@@ -113,7 +114,7 @@ enum SelfTest {
         var latency: Double?
         if audioSeconds >= DictationController.minimumRecordingDuration {
             let session = StreamingTranscription(transcriber: transcriber, voiceActivity: voiceActivity)
-            let piece = 320
+            let piece = SpeechAudioFormat.sampleRate / 50
             let realTime = audioSeconds <= 30
             var index = 0
             while index < samples.count {
@@ -155,11 +156,12 @@ enum SelfTest {
     }
 
     private static func resampleToSpeechFormat(_ buffer: AVAudioPCMBuffer) throws -> [Float] {
-        guard let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false),
+        guard let target = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: Double(SpeechAudioFormat.sampleRate), channels: 1, interleaved: false),
             let converter = AVAudioConverter(from: buffer.format, to: target)
         else { throw SelfTestError.unreadable }
         converter.downmix = true
-        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * 16_000 / buffer.format.sampleRate) + 1024
+        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * Double(SpeechAudioFormat.sampleRate) / buffer.format.sampleRate) + 1024
         guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { throw SelfTestError.unreadable }
         // The converter calls the block synchronously, before convert returns.
         nonisolated(unsafe) var supplied = false

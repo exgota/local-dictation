@@ -47,6 +47,10 @@ struct DictationConfiguration: Codable, Equatable {
     var keepsHistory = false
     var transcriptFolder = TranscriptFolderConfiguration()
 
+    var hotkeyConfiguration: HotkeyConfiguration {
+        HotkeyConfiguration(trigger: trigger, mode: triggerMode, repasteChord: repasteChord, pauseChord: pauseChord)
+    }
+
     /// Keys present in the file whose values could not be read and were replaced by defaults.
     var invalidKeys: [String] = []
 
@@ -74,7 +78,7 @@ struct DictationConfiguration: Codable, Equatable {
         triggerMode = value(.triggerMode, defaults.triggerMode)
         repasteChord = optional(.repasteChord, defaults.repasteChord)
         pauseChord = optional(.pauseChord, defaults.pauseChord)
-        maximumRecordingMinutes = max(1, value(.maximumRecordingMinutes, defaults.maximumRecordingMinutes))
+        maximumRecordingMinutes = min(1_440, max(1, value(.maximumRecordingMinutes, defaults.maximumRecordingMinutes)))
         inputDeviceIdentifier = optional(.inputDeviceIdentifier, defaults.inputDeviceIdentifier)
         stopsAfterSilence = value(.stopsAfterSilence, defaults.stopsAfterSilence)
         silenceStopSeconds = value(.silenceStopSeconds, defaults.silenceStopSeconds)
@@ -153,12 +157,6 @@ enum ApplicationFiles {
     nonisolated static func readConfiguration(fileURL: URL = ApplicationFiles.configurationURL) -> DictationConfiguration {
         (try? Data(contentsOf: fileURL)).flatMap { try? JSONDecoder().decode(DictationConfiguration.self, from: $0) }
             ?? DictationConfiguration()
-    }
-
-    var hotkeyConfiguration: HotkeyConfiguration {
-        HotkeyConfiguration(
-            trigger: configuration.trigger, mode: configuration.triggerMode, repasteChord: configuration.repasteChord,
-            pauseChord: configuration.pauseChord)
     }
 
     private func save() {

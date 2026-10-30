@@ -10,15 +10,15 @@ numbers are in the repository as text and images.
 2. [docs/measurements/](docs/measurements/): raw benchmark, self-test, doctor and live test output.
 3. [docs/model/](docs/model/): Core ML metadata for each model component and the pinned file manifest.
 4. The code, starting with the hot paths:
-   - `Sources/LocalDictation/HotkeyEventTap.swift`: the event tap callback, which must stay free of allocation and
+   - `Sources/LocalDictation/Hotkeys/HotkeyEventTap.swift`: the event tap callback, which must stay free of allocation and
      locks.
    - `Sources/DictationEngine/StreamingTranscription.swift`: the worker that runs voice activity detection (VAD) and
      cuts chunks.
    - `Sources/DictationEngine/SpeechTranscriber.swift`: how the model runs and which compute unit runs each component.
-   - `Sources/LocalDictation/AudioRecorder.swift`: capture.
-   - `Sources/LocalDictation/TextInserter.swift` and `Sources/DictationCore/ClipboardPasteTransaction.swift`:
+   - `Sources/LocalDictation/Recording/AudioRecorder.swift`: capture.
+   - `Sources/LocalDictation/Insertion/TextInserter.swift` and `Sources/DictationCore/ClipboardPasteTransaction.swift`:
      insertion and clipboard handling.
-   - `Sources/LocalDictation/SettingsWindow.swift` and `HeadsUpDisplay.swift`: the interface.
+   - `Sources/LocalDictation/Settings/SettingsWindow.swift` and `Sources/LocalDictation/Display/HeadsUpDisplay.swift`: the interface.
 
 The model weights (1.2 GB) are not in the repository. They are public at
 https://huggingface.co/ConwayResearch/Underdog-Bark-3.0-Pro/tree/4b5c51e04aa8d16dda9ecdff71bc29f7360149e4/coreml.

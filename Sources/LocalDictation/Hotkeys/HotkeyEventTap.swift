@@ -29,6 +29,7 @@ final class HotkeyEventTap: @unchecked Sendable {
     /// callback.
     fileprivate var machPort: CFMachPort?
     private var tapThread: Thread?
+    private var tapThreadFinished: DispatchSemaphore?
     private var tapRunLoop: CFRunLoop?
     private var deliverySource: CFRunLoopSource?
     private let timeoutDisableCount = Atomic<Int>(0)
@@ -71,7 +72,9 @@ final class HotkeyEventTap: @unchecked Sendable {
         else { return false }
         machPort = port
         let ready = DispatchSemaphore(value: 0)
+        let finished = DispatchSemaphore(value: 0)
         let thread = Thread { [weak self] in
+            defer { finished.signal() }
             guard let self, let port = self.machPort else {
                 ready.signal()
                 return
@@ -86,6 +89,7 @@ final class HotkeyEventTap: @unchecked Sendable {
         thread.name = "Hotkey event tap"
         thread.qualityOfService = QualityOfService.userInteractive
         tapThread = thread
+        tapThreadFinished = finished
         thread.start()
         ready.wait()
         return true
@@ -97,8 +101,12 @@ final class HotkeyEventTap: @unchecked Sendable {
         CGEvent.tapEnable(tap: port, enable: false)
         CFMachPortInvalidate(port)
         if let tapRunLoop { CFRunLoopStop(tapRunLoop) }
+        if let tapThreadFinished, tapThreadFinished.wait(timeout: .now() + .milliseconds(500)) == .timedOut {
+            dictationLog.error("event tap thread did not stop within 0.5 seconds")
+        }
         tapRunLoop = nil
         tapThread = nil
+        tapThreadFinished = nil
         machPort = nil
     }
 

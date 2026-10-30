@@ -1,3 +1,4 @@
+import DictationCore
 import AVFoundation
 import AppKit
 import DictationEngine
@@ -55,6 +56,13 @@ enum FixtureScript {
     private let samples = OSAllocatedUnfairLock<[Float]>(initialState: [])
     private var context: SettingsContext?
 
+    init() {
+        recorder.onCaptureInterrupted = { [weak self] error in self?.stop(interruption: error.localizedDescription) }
+        recorder.onMaximumDurationReached = { [weak self] in
+            self?.stop(interruption: "Recording stopped after 10 minutes.")
+        }
+    }
+
     var directory: URL { ApplicationFiles.fixturesDirectory }
 
     func attach(_ context: SettingsContext) {
@@ -70,7 +78,7 @@ enum FixtureScript {
     func start(_ prompt: FixturePrompt) {
         guard recordingIdentifier == nil, let context else { return }
         samples.withLock { $0.removeAll() }
-        context.controller.suspendsHotkeys = true
+        context.controller.setHotkeysSuspended(true, for: .fixtureRecording)
         do {
             let samples = self.samples
             try recorder.start(
@@ -79,21 +87,24 @@ enum FixtureScript {
             recordingIdentifier = prompt.id
             message = nil
         } catch {
-            context.controller.suspendsHotkeys = false
+            context.controller.setHotkeysSuspended(false, for: .fixtureRecording)
             message = error.localizedDescription
         }
     }
 
-    func stop() {
+    func stop() { stop(interruption: nil) }
+
+    private func stop(interruption: String?) {
         guard let identifier = recordingIdentifier, let prompt = FixtureScript.prompts.first(where: { $0.id == identifier }) else { return }
         recorder.finish()
         recordingIdentifier = nil
-        context?.controller.suspendsHotkeys = false
+        context?.controller.setHotkeysSuspended(false, for: .fixtureRecording)
+        if let interruption { message = interruption }
         let recorded = samples.withLock { $0 }
-        Task { await save(prompt, samples: recorded) }
+        Task { await save(prompt, samples: recorded, interruption: interruption) }
     }
 
-    private func save(_ prompt: FixturePrompt, samples: [Float]) async {
+    private func save(_ prompt: FixturePrompt, samples: [Float], interruption: String?) async {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let audioURL = directory.appendingPathComponent("\(prompt.id).wav")
@@ -105,16 +116,17 @@ enum FixtureScript {
             }
             try ((expected ?? "") + "\n").write(
                 to: directory.appendingPathComponent("\(prompt.id).expected.txt"), atomically: true, encoding: .utf8)
-            message = "Saved \(prompt.id): \(String(format: "%.1f", Double(samples.count) / 16_000)) s."
-                + (prompt.expectedText == nil ? " Check its expected text against what you said." : "")
+            message = interruption ?? ("Saved \(prompt.id): \(String(format: "%.1f", Double(samples.count) / Double(SpeechAudioFormat.sampleRate))) s."
+                + (prompt.expectedText == nil ? " Check its expected text against what you said." : ""))
             refreshSaved()
         } catch {
-            message = "\(prompt.id) could not be saved: \(error.localizedDescription)"
+            let saveError = "\(prompt.id) could not be saved: \(error.localizedDescription)"
+            message = interruption.map { "\($0) \(saveError)" } ?? saveError
         }
     }
 
     private static func writeWave(_ samples: [Float], to url: URL) throws {
-        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false),
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(SpeechAudioFormat.sampleRate), channels: 1, interleaved: false),
             let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(max(samples.count, 1)))
         else { throw CocoaError(.fileWriteUnknown) }
         buffer.frameLength = AVAudioFrameCount(samples.count)

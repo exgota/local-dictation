@@ -1,3 +1,4 @@
+import DictationCore
 import AVFoundation
 import CoreML
 import DictationEngine
@@ -11,7 +12,9 @@ func megabytes(_ bytes: UInt64) -> String { String(format: "%.0f MB", Double(byt
 
 func readSamples(_ url: URL) throws -> [Float] {
     let file = try AVAudioFile(forReading: url)
-    precondition(file.processingFormat.sampleRate == 16_000 && file.processingFormat.channelCount == 1, "Expected mono 16 kHz")
+    precondition(
+        file.processingFormat.sampleRate == Double(SpeechAudioFormat.sampleRate) && file.processingFormat.channelCount == 1,
+        "Expected mono 16 kHz")
     let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length))!
     try file.read(into: buffer)
     return Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count: Int(buffer.frameLength)))
@@ -32,15 +35,16 @@ if arguments.count >= 6, arguments[1] == "stream" {
     for path in arguments[5...] {
         let file = try AVAudioFile(forReading: URL(fileURLWithPath: path))
         let format = file.processingFormat
-        precondition(format.sampleRate == 16_000 && format.channelCount == 1, "Expected mono 16 kHz")
+        precondition(format.sampleRate == Double(SpeechAudioFormat.sampleRate) && format.channelCount == 1, "Expected mono 16 kHz")
         let session = StreamingTranscription(transcriber: transcriber, voiceActivity: voiceActivity)
-        let piece = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 320)!
+        let pieceFrameCount = AVAudioFrameCount(SpeechAudioFormat.sampleRate / 50)
+        let piece = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: pieceFrameCount)!
         var maximumFootprint: UInt64 = 0
         var pieces = 0
         // The file is also read in pieces, so the measured footprint is the pipeline's and does not include a
         // whole-file array.
         while file.framePosition < file.length {
-            try file.read(into: piece, frameCount: 320)
+            try file.read(into: piece, frameCount: pieceFrameCount)
             session.append(Array(UnsafeBufferPointer(start: piece.floatChannelData![0], count: Int(piece.frameLength))))
             pieces += 1
             // One 20 ms piece per 1 ms sleep feeds audio at no more than 20 times real time, far faster than a

@@ -201,6 +201,46 @@ final class HotkeyStateMachineTests: XCTestCase {
         machine.resetSession()
         XCTAssertEqual(machine.handle(fn(false, at: 1)), [])
     }
+
+    func testInterruptedPressDoesNotCarryCleanlinessOrTimingIntoNextPress() {
+        var machine = machine(.doubleTapLock)
+        XCTAssertEqual(machine.handle(fn(true, at: 0)), [.holdBegan])
+        XCTAssertEqual(machine.handle(key(123, at: 1, flags: functionDown)), [.holdInterrupted])
+        XCTAssertEqual(machine.handle(fn(false, at: 2)), [])
+        XCTAssertEqual(machine.handle(fn(true, at: 3)), [.holdBegan])
+        let releaseTime = 3.1
+        XCTAssertEqual(machine.handle(fn(false, at: releaseTime)), [.scheduleDeadline(releaseTime + HotkeyStateMachine.doubleTapInterval)])
+    }
+
+    func testDuplicateKeyReleaseDoesNotReuseCompletedPress() {
+        var machine = machine(.doubleTapLock, trigger: .key(KeyChord(keyCode: 105, modifiers: [])))
+        XCTAssertEqual(machine.handle(key(105, at: 0)), [.holdBegan])
+        let releaseTime = 0.1
+        let deadline = releaseTime + HotkeyStateMachine.doubleTapInterval
+        XCTAssertEqual(machine.handle(.keyUp(keyCode: 105, flags: 0, time: releaseTime)), [.scheduleDeadline(deadline)])
+        XCTAssertEqual(machine.handle(.keyUp(keyCode: 105, flags: 0, time: 0.2)), [])
+        XCTAssertEqual(machine.handle(.deadlineElapsed(time: deadline)), [.holdEnded])
+    }
+
+    func testChangingTriggerDiscardsPreviousPress() {
+        var machine = machine(.doubleTapLock, trigger: .key(KeyChord(keyCode: 105, modifiers: [])))
+        XCTAssertEqual(machine.handle(key(105, at: 0)), [.holdBegan])
+        machine.configuration.trigger = .function
+        XCTAssertEqual(machine.handle(.keyUp(keyCode: 105, flags: 0, time: 0.1)), [])
+        XCTAssertEqual(machine.handle(fn(true, at: 0.2)), [.holdBegan])
+        let releaseTime = 0.3
+        XCTAssertEqual(machine.handle(fn(false, at: releaseTime)), [.scheduleDeadline(releaseTime + HotkeyStateMachine.doubleTapInterval)])
+    }
+
+    func testResetSessionPreservesHeldTriggerUntilRelease() {
+        var machine = machine(.hold)
+        XCTAssertEqual(machine.handle(fn(true, at: 0)), [.holdBegan])
+        machine.resetSession()
+        XCTAssertEqual(machine.handle(fn(true, at: 1)), [])
+        XCTAssertEqual(machine.handle(fn(false, at: 2)), [])
+        XCTAssertEqual(machine.handle(fn(true, at: 3)), [.holdBegan])
+        XCTAssertEqual(machine.handle(fn(false, at: 4)), [.holdEnded])
+    }
 }
 
 final class EventTapSharedStateTests: XCTestCase {

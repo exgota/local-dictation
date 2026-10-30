@@ -2,8 +2,8 @@
 
 [![Continuous integration](https://github.com/exgota/local-dictation/actions/workflows/continuous-integration.yml/badge.svg)](https://github.com/exgota/local-dictation/actions/workflows/continuous-integration.yml)
 
-Dictation for macOS that runs entirely on your Mac. Press Fn, talk, press Fn again, and the text appears where your
-cursor is. It uses no cloud service and needs no account.
+Dictation for macOS that runs entirely on your Mac, built for people who prompt AI tools by voice. Press Fn, talk, press
+Fn again, and the text appears where your cursor is. It uses no cloud service and needs no account.
 
 ![The dictation pill while listening](docs/screenshots/hud-listening.png)
 
