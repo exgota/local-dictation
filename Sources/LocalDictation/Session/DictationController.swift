@@ -63,6 +63,10 @@ import os
     private var subscriptions: Set<AnyCancellable> = []
     private var hotkeyInstallTimer: Timer?
     private var deadlineTimer: Timer?
+    private var microphoneSilence: MicrophoneSilenceMonitor?
+    private var microphoneSilenceTimer: Timer?
+    private var isShowingSilentMicrophone = false
+    private var briefDisplayIdentifier: UUID?
 
     var onRequiresAttention: () -> Void = {}
 
@@ -77,7 +81,10 @@ import os
 
         eventTap.onEvent = { [weak self] event in self?.handle(event) }
         eventTap.sharedState.publish(configuration: settings.configuration.hotkeyConfiguration)
-        recorder.onLevel = { [weak self] level in self?.headsUpDisplay.setLevel(level) }
+        recorder.onLevel = { [weak self] level in
+            self?.headsUpDisplay.setLevel(level)
+            self?.microphoneSilence?.receive(decibels: level, at: monotonicSeconds())
+        }
         recorder.onMaximumDurationReached = { [weak self] in self?.maximumDurationReached() }
         recorder.onCaptureInterrupted = { [weak self] error in self?.finishRecording(interruption: error) }
 
@@ -187,11 +194,15 @@ import os
         }
     }
 
-    private func showBriefly(_ message: String) {
-        headsUpDisplay.showMessage(message, on: NSScreen.screenWithMouse())
+    private func showBriefly(_ show: () -> Void) {
+        let identifier = UUID()
+        briefDisplayIdentifier = identifier
+        show()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self, self.phase == .idle else { return }
-            self.headsUpDisplay.hide()
+            guard let self, self.briefDisplayIdentifier == identifier else { return }
+            self.briefDisplayIdentifier = nil
+            if self.phase == .idle { self.headsUpDisplay.hide() }
+            if self.phase == .transcribing { self.headsUpDisplay.showTranscribing() }
         }
     }
 
@@ -245,7 +256,7 @@ import os
             if permissions.microphoneGranted, model.state == .loading {
                 // The model is loading, which happens at launch and after a change of compute target: show a brief
                 // message instead of opening a window.
-                showBriefly("Model loading…")
+                showBriefly { headsUpDisplay.showMessage("Model loading…", on: NSScreen.screenWithMouse()) }
                 return
             }
             NSSound.beep()
@@ -268,8 +279,12 @@ import os
             streaming.cancel()
             NSSound.beep()
             lastMessage = error.localizedDescription
+            if (error as? AudioRecorderError)?.showsMicrophoneWarning == true {
+                showBriefly { headsUpDisplay.showSilentMicrophone() }
+            }
             return
         }
+        briefDisplayIdentifier = nil
         recording = Recording(identifier: identifier, trigger: trigger, target: target, streaming: streaming)
         dictationLog.notice("recording started (\(String(describing: trigger))) target \(target?.applicationName ?? "none")\(self.deliveries.isEmpty ? "" : ", \(self.deliveries.count) still transcribing")")
         if let target, target.focusedElement == nil { completeTarget(target, recording: identifier) }
@@ -278,6 +293,33 @@ import os
         updatePhase()
         fallback.hide()
         headsUpDisplay.showListening(on: NSScreen.screenWithMouse())
+        watchForSilentMicrophone()
+    }
+
+    /// The recording keeps running under the warning, and the bars come back on their own with the sound.
+    private func watchForSilentMicrophone() {
+        microphoneSilence = MicrophoneSilenceMonitor(startTime: monotonicSeconds())
+        microphoneSilenceTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let silence = self.microphoneSilence else { return }
+                let isSilent = silence.isSilent(at: monotonicSeconds())
+                guard isSilent != self.isShowingSilentMicrophone else { return }
+                self.isShowingSilentMicrophone = isSilent
+                dictationLog.notice("microphone \(isSilent ? "went silent" : "signal returned")")
+                if isSilent {
+                    self.headsUpDisplay.showSilentMicrophone()
+                } else {
+                    self.headsUpDisplay.resumeListening()
+                }
+            }
+        }
+    }
+
+    private func stopWatchingForSilentMicrophone() {
+        microphoneSilenceTimer?.invalidate()
+        microphoneSilenceTimer = nil
+        microphoneSilence = nil
+        isShowingSilentMicrophone = false
     }
 
     /// The start sound plays once the microphone is live, so speech that follows the sound is recorded from its first
@@ -331,7 +373,7 @@ import os
                 dictationLog.notice("transcription finished after cancellation; discarded")
                 return
             }
-            dictationLog.notice("transcribed \(result.chunkCount) chunks, \(String(format: "%.1f", result.transcribedSeconds)) of \(String(format: "%.1f", result.audioSeconds)) s with speech: \(result.text.count) characters, stop to result \(String(format: "%.3f", Date().timeIntervalSince(stopTime))) s, of which model \(String(format: "%.3f", result.processingSecondsAfterEnd)) s")
+            dictationLog.notice("transcribed \(result.chunkCount) windows, \(String(format: "%.1f", result.transcribedSeconds)) s of model input from \(String(format: "%.1f", result.audioSeconds)) s recorded: \(result.text.count) characters, stop to result \(String(format: "%.3f", Date().timeIntervalSince(stopTime))) s, of which model \(String(format: "%.3f", result.processingSecondsAfterEnd)) s")
             await previous?.value
             guard self.deliveries[identifier] != nil, !Task.isCancelled else { return }
             if let interruption {
@@ -442,7 +484,7 @@ import os
     /// The text is in the target. The display goes away now, not when the clipboard is restored a moment later, unless
     /// a newer dictation is recording or still transcribing.
     private func deliveryLanded(_ delivery: UUID) {
-        guard recording == nil, deliveries.count == 1, deliveries[delivery] != nil else { return }
+        guard briefDisplayIdentifier == nil, recording == nil, deliveries.count == 1, deliveries[delivery] != nil else { return }
         headsUpDisplay.hide()
     }
 
@@ -451,6 +493,7 @@ import os
     }
 
     private func updateHeadsUpDisplay() {
+        guard briefDisplayIdentifier == nil || phase == .recording else { return }
         switch phase {
         case .idle: headsUpDisplay.hide()
         case .recording: headsUpDisplay.showListening(on: NSScreen.screenWithMouse())
@@ -460,6 +503,7 @@ import os
 
     /// Ends the recording without touching earlier dictations that are still transcribing.
     private func endRecording() {
+        stopWatchingForSilentMicrophone()
         recording = nil
         hotkeys.resetSession()
         updatePhase()

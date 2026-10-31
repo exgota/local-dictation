@@ -8,6 +8,7 @@ import SwiftUI
         case listening
         /// The bars stop where they were when recording ended and dim until the text lands.
         case transcribing
+        case silentMicrophone
         case message(String)
     }
 
@@ -66,15 +67,16 @@ import SwiftUI
 
     /// Advances the smoothing to `date` and returns the heights to draw. When `advancing` is false the heights stay as
     /// they are, and the first frame after that does not jump.
-    func heights(at date: Date, advancing: Bool) -> [CGFloat] {
+    func heights(at date: Date, advancing: Bool, resting: Bool) -> [CGFloat] {
         guard advancing else {
             lastFrame = nil
             return heights
         }
         let elapsed = Float(min(max(lastFrame.map { date.timeIntervalSince($0) } ?? 0, 0), 0.05))
         lastFrame = date
-        let timeConstant = energy > level ? Self.attackSeconds : Self.releaseSeconds
-        level += (energy - level) * (1 - exp(-elapsed / timeConstant))
+        let target = resting ? 0 : energy
+        let timeConstant = target > level ? Self.attackSeconds : Self.releaseSeconds
+        level += (target - level) * (1 - exp(-elapsed / timeConstant))
         if level < 0.002 { level = 0 }
         let wobbleStep = 1 - exp(-elapsed / Self.wobbleSeconds)
         for index in heights.indices {
@@ -129,6 +131,10 @@ import SwiftUI
         show(.listening, on: screen)
     }
 
+    func resumeListening() {
+        showListening(on: screen ?? NSScreen.screenWithMouse())
+    }
+
     func showTranscribing() {
         show(.transcribing, on: screen ?? NSScreen.screenWithMouse())
     }
@@ -137,9 +143,15 @@ import SwiftUI
         show(.message(message), on: screen)
     }
 
+    func showSilentMicrophone() {
+        let screen = panel.isVisible ? (screen ?? NSScreen.screenWithMouse()) : NSScreen.screenWithMouse()
+        if !panel.isVisible { model.meter.reset() }
+        show(.silentMicrophone, on: screen)
+    }
+
     /// The microphone level in dBFS.
     func setLevel(_ decibels: Float) {
-        guard model.state == .listening else { return }
+        guard model.state == .listening || model.state == .silentMicrophone else { return }
         model.meter.receive(decibels)
     }
 
@@ -201,11 +213,23 @@ struct HeadsUpDisplayView: View {
 
     @ViewBuilder private var content: some View {
         switch model.state {
-        case .listening, .transcribing:
-            LevelMeter(meter: model.meter, isLive: model.state == .listening && model.isPresented)
-                .opacity(model.state == .transcribing ? 0.5 : 1)
-                .animation(.easeOut(duration: 0.16), value: model.state)
-                .frame(width: Self.size.width, height: Self.size.height)
+        case .listening, .transcribing, .silentMicrophone:
+            let isSilent = model.state == .silentMicrophone
+            let isTranscribing = model.state == .transcribing
+            ZStack {
+                LevelMeter(
+                    meter: model.meter, isLive: !isTranscribing && model.isPresented, resting: isSilent,
+                    warningAmount: isSilent ? 1 : 0)
+                    .animation(.easeOut(duration: 0.22), value: isSilent)
+                    .opacity(isTranscribing ? 0.5 : 1)
+                    .animation(.easeOut(duration: 0.16), value: isTranscribing)
+                SilentMicrophoneIcon()
+                    .frame(width: 22, height: 22)
+                    .opacity(isSilent ? 1 : 0)
+                    .scaleEffect(isSilent ? 1 : 0.92)
+                    .animation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.2), value: isSilent)
+            }
+            .frame(width: Self.size.width, height: Self.size.height)
         case .message(let text):
             Text(text)
                 .font(.system(size: 13))
@@ -218,17 +242,24 @@ struct HeadsUpDisplayView: View {
 
 /// Twenty bars, 2 pt wide at a pitch of 4.5 pt from one bar's start to the next, vertically centered and snapped to
 /// device pixels, redrawn at the display's refresh rate while live.
-private struct LevelMeter: View {
+private struct LevelMeter: View, Animatable {
     private static let barWidth: CGFloat = 2
     private static let barPitch: CGFloat = 4.5
 
     let meter: LevelMeterAnimator
     let isLive: Bool
+    let resting: Bool
+    var warningAmount: CGFloat
     @Environment(\.displayScale) private var displayScale
+
+    nonisolated var animatableData: CGFloat {
+        get { warningAmount }
+        set { warningAmount = newValue }
+    }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: nil, paused: !isLive)) { timeline in
-            let heights = meter.heights(at: timeline.date, advancing: isLive)
+            let heights = meter.heights(at: timeline.date, advancing: isLive, resting: resting)
             let scale = displayScale
             Canvas { context, size in
                 let stripWidth = CGFloat(heights.count - 1) * Self.barPitch + Self.barWidth
@@ -236,9 +267,35 @@ private struct LevelMeter: View {
                 for (index, height) in heights.enumerated() {
                     let x = ((start + CGFloat(index) * Self.barPitch) * scale).rounded() / scale
                     let bar = CGRect(x: x, y: (size.height - height) / 2, width: Self.barWidth, height: height)
-                    context.fill(Path(roundedRect: bar, cornerRadius: Self.barWidth / 2), with: .color(Color(nsColor: .systemBlue)))
+                    let warningOpacity: CGFloat = (7...12).contains(index) ? 0 : 0.32
+                    context.opacity = 1 - warningAmount * (1 - warningOpacity)
+                    context.fill(Path(roundedRect: bar, cornerRadius: Self.barWidth / 2), with: .color(Color(red: 10 / 255, green: 132 / 255, blue: 1)))
                 }
             }
+        }
+    }
+}
+
+private struct SilentMicrophoneIcon: View {
+    var body: some View {
+        Canvas { context, size in
+            let scale = min(size.width, size.height) / 24
+            context.scaleBy(x: scale, y: scale)
+            let white = Color.white.opacity(0.92)
+            context.fill(Path(roundedRect: CGRect(x: 8.75, y: 2.5, width: 6.5, height: 12), cornerRadius: 3.25), with: .color(white))
+            var arc = Path()
+            arc.addArc(center: CGPoint(x: 12, y: 11.5), radius: 6.75, startAngle: .degrees(180), endAngle: .degrees(0), clockwise: true)
+            context.stroke(arc, with: .color(white), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            var stem = Path()
+            stem.move(to: CGPoint(x: 12, y: 18.25))
+            stem.addLine(to: CGPoint(x: 12, y: 21.5))
+            context.stroke(stem, with: .color(white), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            var slash = Path()
+            slash.move(to: CGPoint(x: 4, y: 3.5))
+            slash.addLine(to: CGPoint(x: 20, y: 20.5))
+            context.stroke(slash, with: .color(Color(red: 20 / 255, green: 20 / 255, blue: 20 / 255)),
+                           style: StrokeStyle(lineWidth: 5.5, lineCap: .round))
+            context.stroke(slash, with: .color(white), style: StrokeStyle(lineWidth: 2, lineCap: .round))
         }
     }
 }

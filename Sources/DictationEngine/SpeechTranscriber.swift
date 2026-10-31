@@ -90,7 +90,11 @@ public actor SpeechTranscriber {
         var state = try TdtDecoderState()
         let result = try await manager.transcribe(padded, decoderState: &state)
         return TranscriptionOutcome(
-            text: result.text.trimmingCharacters(in: .whitespacesAndNewlines), tokenTimings: result.tokenTimings,
+            text: TranscriptUnknownMarker.remove(from: result.text).trimmingCharacters(in: .whitespacesAndNewlines),
+            tokenTimings: result.tokenTimings?.map {
+                TokenTiming(token: TranscriptUnknownMarker.remove(fromPiece: $0.token), tokenId: $0.tokenId,
+                            startTime: $0.startTime, endTime: $0.endTime, confidence: $0.confidence)
+            },
             encoderFunction: useShort ? Self.shortFunctionName : Self.fullFunctionName,
             audioSeconds: Double(samples.count) / Double(SpeechAudioFormat.sampleRate),
             processingSeconds: Date().timeIntervalSince(start))

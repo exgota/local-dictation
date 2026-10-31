@@ -83,20 +83,6 @@ struct AudioInputDevice: Identifiable, Hashable {
     }
 }
 
-enum AudioRecorderError: LocalizedError {
-    case inputUnavailable
-    case selectedDeviceUnavailable
-    case converterUnavailable
-
-    var errorDescription: String? {
-        switch self {
-        case .inputUnavailable: return "No microphone input is available."
-        case .selectedDeviceUnavailable: return "The selected microphone is not available. Choose another in Settings."
-        case .converterUnavailable: return "The microphone format cannot be converted to 16 kHz."
-        }
-    }
-}
-
 /// Captures the selected microphone as mono 16 kHz Float32 through `AVCaptureSession`, which selects the device by its
 /// Core Audio UID and converts the format itself.
 ///

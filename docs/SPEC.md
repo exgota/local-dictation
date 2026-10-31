@@ -6,8 +6,8 @@ Core ML (Apple's on-device machine-learning framework), with Underdog Bark 3.0 P
 parameter model Parakeet TDT (token-and-duration transducer). After the one-time model download the app opens no
 network connection.
 
-Every measurement in this document was taken on one Mac, running macOS 27, on
-October 26, 2026.
+The measurements in the table below describe the 1.0.1 release on one Mac running macOS 27 on October 26, 2026.
+They do not measure the overlapping-window implementation.
 
 ## Numbers
 
@@ -23,7 +23,7 @@ October 26, 2026.
 | Word error rate (word-level edit distance divided by the number of reference words) | 0.58 % on a 5.5 min live recording played through a speaker into the microphone; 0.81 to 2.11 % on recordings fed to the streaming pipeline | [measurements/streaming-benchmark.txt](measurements/streaming-benchmark.txt) |
 | Memory (physical footprint, the figure Activity Monitor shows) | 96 MB idle with the model loaded; 49 to 53 MB peak in the streaming benchmark for 3 and 16 minute inputs | [measurements/streaming-benchmark.txt](measurements/streaming-benchmark.txt) |
 | Idle CPU | 0.0 % | [measurements/streaming-benchmark.txt](measurements/streaming-benchmark.txt) |
-| Tests | 180 unit tests pass; self-test 11 of 12 synthetic fixtures | [measurements/selftest.txt](measurements/selftest.txt) |
+| Tests | 165 unit tests pass; self-test 11 of 12 synthetic fixtures | [measurements/selftest.txt](measurements/selftest.txt) |
 
 ## Architecture
 
@@ -34,8 +34,8 @@ flowchart LR
   Main --> Capture[AVCaptureSession, 16 kHz mono]
   Capture -->|samples| Stream[StreamingTranscription worker]
   Stream --> VAD[Silero VAD, CPU, 256 ms frames]
-  VAD --> Planner[SpeechChunkPlanner]
-  Planner -->|cores with guards, up to 14.782 s| ASR[SpeechTranscriber: Bark on Core ML]
+  VAD --> Windows[Overlapping speech windows]
+  Windows -->|14.5 s windows, 3.625 s hop| ASR[SpeechTranscriber: Bark on Core ML]
   ASR --> Text[TranscriptPipeline: profile, corrections]
   Text --> Insert[TextInserter: AX insert, then paste]
   Insert --> App[Focused app]
@@ -48,7 +48,7 @@ Silero is the VAD model and Bark is the speech model.
 
 | Module | Role | Main files |
 |---|---|---|
-| `DictationCore` | Pure logic with no AppKit dependency, unit tested | `HotkeyStateMachine.swift`, `EventTapSharedState.swift`, `TextInjection.swift`, `ClipboardPasteTransaction.swift`, `SpeechChunkPlanner.swift` |
+| `DictationCore` | Pure logic with no AppKit dependency, unit tested | `HotkeyStateMachine.swift`, `EventTapSharedState.swift`, `TextInjection.swift`, `ClipboardPasteTransaction.swift`, `MicrophoneSilenceMonitor.swift`, `SpeechWindowBuffer.swift`, `TranscriptOverlapMerger.swift` |
 | `DictationEngine` | Model download, validation, compilation, transcription, VAD, streaming | `ModelManifest.swift`, `ModelStore.swift`, `SpeechTranscriber.swift`, `StreamingTranscription.swift` |
 | `TextProcessing` | Deterministic text cleanup and per-app profiles | `TranscriptProcessor.swift`, `VocabularyCorrections.swift`, `TranscriptProfile.swift` |
 | `TranscriptHistory` | SQLite history | `TranscriptHistoryStore.swift` |
@@ -61,7 +61,7 @@ Silero is the VAD model and Bark is the speech model.
 | Hotkey event tap (own thread, own run loop) | Copies each key event into a ring buffer of 512 slots (511 events fit), decides from atomic variables whether to swallow the event, and signals the main run loop | The callback allocates nothing and takes no locks or I/O. macOS disables a tap that takes too long |
 | Main | State machine, controller and interface | |
 | `LocalDictation.AudioCapture` queue | `AVCaptureAudioDataOutput` delivers 16 kHz mono Float32 samples, which go to `StreamingTranscription` | A lock guards the consumer reference and is not held while the consumer runs |
-| Streaming worker (detached task, user-initiated priority) | VAD for each 4096-sample frame, chunk planning, and transcription of each chunk while the user is still talking | A single consumer, so frames stay in order |
+| Streaming worker (detached task, user-initiated priority) | VAD for each 4096-sample frame and transcription of each overlapping window while the user is still talking | A single consumer, so frames stay in order |
 | Core ML | The encoder runs on the Neural Engine. The preprocessor, decoder, joint and VAD run on the CPU | |
 
 ## Lifecycle of one dictation
@@ -72,24 +72,19 @@ Silero is the VAD model and Bark is the speech model.
    `AVCaptureSession` (the AVFoundation capture session) and a `StreamingTranscription`, and shows the HUD (heads-up
    display). The start cue plays once the microphone delivers its first samples, so speech after the cue is never
    clipped. The microphone is on from this step until step 5.
-3. The capture queue passes samples to the streaming worker, which cuts them into frames of 4096 samples (256 ms).
-   Silero gives each frame a speech probability. `SpeechChunkPlanner` groups frames into cores and drops leading
-   silence. Once a core holds 31 frames (about 8 s), two consecutive frames below the 0.35 continuation threshold
-   propose a cut. At 42 frames (about 10.8 s), one such frame is enough. At 47 frames (12.032 s), a forced cut uses the
-   least speech-like of the last 12 frames. The worker searches the proposed gap in 40 ms energy windows and cuts at
-   its quietest point, retaining the remaining samples for the next core. For a forced cut in speech, the search also
-   covers the frames adjacent to the least speech-like frame.
-4. The worker transcribes each core with up to 1.25 s of preceding audio and 1.25 s of following audio as guards. The
-   first core has no left guard. A mid-recording cut waits for its right guard; at stop, any pending core includes the
-   audio already received after its cut and is transcribed without waiting. The worker keeps a whole word only when the
-   first token's timestamp falls inside the core, accounting for the leading silence and left guard. If adjacent decodes
-   place one word on both sides of a cut, the second copy is dropped. If both leave it out, it is restored. It rebuilds
-   text from the selected tokens. If token timings are unavailable, it keeps the full chunk text. When transcription
-   keeps pace with speech, only the last chunk remains to be transcribed when the user stops, even after a 10-minute
-   dictation.
-5. The user presses Fn again. Capture stops, the planner trims trailing silence from the last core when no cut is
-   pending, and the worker transcribes it. Recordings under 0.3 s are dropped without transcription, so a stray tap of Fn does nothing and Fn's
-   own shortcuts keep working.
+3. The capture queue passes samples to the streaming worker, which evaluates 4096-sample (256 ms) frames with
+   Silero. Speech starts at probability 0.5. After speech, the worker uses a 0.35 continuation threshold while no
+   more than three preceding frames have been classified as nonspeech, then returns to 0.5. The detector reports trailing silence for the optional auto-stop. The worker keeps 512 ms before and 768 ms after
+   detected speech when it trims an analysis window. Windows with no detected speech are skipped.
+4. The worker transcribes 14.5 s windows every 3.625 s, keeping the overlap in memory. It joins successive results at
+   matching, similarly timed words near the middle of their overlap. A recording no longer than one window needs one
+   decode. When timings are missing, empty, nonmonotonic or inconsistent with the model text, the worker keeps the existing result, decodes only audio not
+   already covered, and starts a fresh window. The literal unknown-token marker is removed without guessing punctuation.
+5. The user presses Fn again. Capture stops and, if audio extends beyond the last full window, the worker decodes at
+   most one remaining window, plus a short fallback decode if timings are unusable. Recordings under 0.3 s are dropped
+   without transcription, so a stray tap of Fn does nothing and Fn's own shortcuts keep working. The capture stream
+   retains pending samples until the worker consumes them. It does not impose a fixed queue limit; the app's recording
+   duration setting limits a session to at most 60 minutes.
 6. `TranscriptPipeline` applies the profile of the target app (see Text processing). `TextInserter` then checks that the
    same element still has focus and inserts the text.
 7. The app writes the text to the history and to `~/Desktop/Transcripts/<date>/<time> <first words>.md`, each only when
@@ -125,12 +120,10 @@ output length. The table lists the components in execution order.
 `coremlcompiler` produced the full metadata in [model/](model/). The official runner that the app follows is in
 [model/official-runner/](model/official-runner/).
 
-- The app prepends 0.25 s of silence to every chunk, as the official runner does.
-- `short8` takes audio of up to 8 s including that padding (128,000 samples). `full15` takes longer audio. A core of up
-  to 47 frames (12.032 s), two guards of up to 1.25 s each, and the leading silence total at most 14.782 s. At stop, a
-  pending core can extend into its received right guard, without increasing that total, so `full15` receives a single
-  window.
-- Decoding is greedy TDT (token and duration): no beam search, no vocabulary biasing, English only. Each chunk starts
+- The app prepends 0.25 s of silence to every window, as the official runner does.
+- `short8` takes audio of up to 8 s including that padding (128,000 samples). `full15` takes longer audio. A 14.5 s
+  window and the leading silence total 14.75 s, so `full15` receives a single window.
+- Decoding is greedy TDT (token and duration): no beam search, no vocabulary biasing, English only. Each window starts
   with a fresh decoder state.
 - Both encoder functions load at launch. A warm-up is one prediction on silence, because the first prediction of a
   function is slower. The app warms the functions at launch with 1 s and 10 s of silence, so the first dictation pays no
@@ -261,11 +254,14 @@ system fonts and colors, in Light and Dark appearance.
 The HUD is a dark pill of 124 × 50 pt in a non-activating panel, which is a window that does not make its app active.
 The panel sits at the bottom of the screen that holds the mouse pointer and can never take focus.
 
-While recording, the pill shows 20 bars that rise and fall in place with the voice. All bars follow one smoothed
-loudness, and each bar scales it by a fixed offset. The smoothing takes about 60 ms to rise and 90 ms to fall. Below
--50 dBFS (decibels relative to full scale), which the app treats as room noise, the bars stay still. When recording
-stops, the bars freeze where they are and dim until the text lands. The pill then disappears without waiting for the
-clipboard restore. It scales and fades in over 150 ms and out over 120 ms.
+While recording, the pill shows 20 blue (`#0a84ff`) bars that rise and fall in place with the voice. All bars follow one
+smoothed loudness, and each bar scales it by a fixed offset. The smoothing takes about 60 ms to rise and 90 ms to fall. Below
+-50 dBFS (decibels relative to full scale), which the app treats as room noise, the bars stay still. If the level stays
+at or below -100 dBFS for 3 s, or no audio arrives at all, the bars ease to rest and dim around a crossed-out microphone
+icon. Recording continues, and the bars return when the sound does. If the default or selected microphone is unavailable
+at the start, the same warning appears immediately for 1.5 s, and the menu reports the error. No recording starts. If a
+capture is interrupted during recording, its existing interruption handling still applies. When recording stops, the
+bars freeze where they are and dim until the text lands. The pill then disappears without waiting for the clipboard restore. It scales and fades in over 150 ms and out over 120 ms.
 
 The pill shows no text except "Model loading…", which appears when the trigger is pressed before the model is ready. The
 menu bar icon does not change while dictating; it changes only when setup is needed. The start and stop sounds are
@@ -299,9 +295,9 @@ or read the report through the socket.
 
 ## Testing
 
-- `swift test` runs 180 unit tests. They cover the hotkey state machine driven by synthetic key events, the clipboard
-  transaction against a slow fake target, the injection chain with a spy, chunk boundaries from voice activity, the text
-  steps, corrections, profiles, the cleanup client against a stubbed server, and history.
+- `swift test` runs 165 unit tests. They cover the hotkey state machine driven by synthetic key events, the clipboard
+  transaction against a slow fake target, the injection chain with a spy, overlapping windows and their merge, the silent
+  microphone check, the text steps, corrections, profiles, the cleanup client against a stubbed server, and history.
 - `--selftest` runs WAV fixtures through the real pipeline and checks three things. The word error rate must be at most
   8 % for quiet fixtures and 15 % for noise and headset fixtures. Behavior fixtures must match the expected text word
   for word, ignoring case and punctuation. Latency, from the end of the audio to the final text, must be at most 1.5 s
@@ -329,11 +325,11 @@ or read the report through the socket.
 These are leads, not findings.
 
 1. The preprocessor input is fixed at 240,000 samples and both encoder functions take 1,501 mel frames (columns of the
-   mel spectrogram), so a 2 s chunk may pay for 15 s of mel and encoder work. Does FluidAudio pad every call to the full
+   mel spectrogram), so a 2 s recording may pay for 15 s of mel and encoder work. Does FluidAudio pad every call to the full
    window? `short8` and `full15` differ only in output length.
 2. The decoder and joint run once per emitted token on the CPU with Float16 weights. Would fusing them, or running them
-   on the Neural Engine or GPU, cut the per-chunk tail?
-3. Every chunk starts with a fresh decoder state. Carrying the LSTM state across chunk cuts might improve accuracy at
+   on the Neural Engine or GPU, cut the per-window tail?
+3. Every window starts with a fresh decoder state. Carrying the LSTM state across windows might improve accuracy at
    the boundaries.
 4. The 1.1 GB encoder costs 6 s to load at every launch, and 39 s the first time. Is there a cheaper warm path?
 5. Would fine-tuning for one voice pay off, and what data would it

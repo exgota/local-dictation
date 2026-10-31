@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.2 (October 31, 2026)
+
+- Long recordings use overlapping speech windows to join words across boundaries.
+- Unknown-token markers are removed from transcribed text.
+- The recording indicator warns when the microphone is silent or unavailable.
+
 ## 1.0.1 (October 30, 2026)
 
 - Long dictation is more accurate where speech is split into chunks. Each chunk is decoded with the audio around it,
