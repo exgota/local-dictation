@@ -3,12 +3,13 @@ import PackageDescription
 
 let package = Package(
     name: "LocalDictation",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS(.v26)],
     products: [
         .executable(name: "LocalDictation", targets: ["LocalDictation"]),
         .executable(name: "TranscriptionBenchmark", targets: ["TranscriptionBenchmark"]),
     ],
     dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle.git", exact: "2.10.1"),
         // Pinned to the revision published with the Bark 3.0 Pro Core ML runner.
         .package(
             url: "https://github.com/FluidInference/FluidAudio.git",
@@ -23,13 +24,18 @@ let package = Package(
             dependencies: ["DictationEngine"]),
         // Platform-independent decision logic: hotkey state machine, injection chain, clipboard restoration.
         .target(name: "DictationCore"),
+        .target(name: "MoonRendering", dependencies: ["DictationCore"], resources: [.copy("Resources")]),
         // Deterministic transcript post-processing: corrections, spoken punctuation, profiles.
         .target(name: "TextProcessing"),
         // Opt-in transcript history in SQLite.
         .target(name: "TranscriptHistory", linkerSettings: [.linkedLibrary("sqlite3")]),
         .executableTarget(
             name: "LocalDictation",
-            dependencies: ["DictationEngine", "DictationCore", "TextProcessing", "TranscriptHistory"]),
+            dependencies: ["DictationEngine", "DictationCore", "TextProcessing", "TranscriptHistory", "MoonRendering",
+                           .product(name: "Sparkle", package: "Sparkle")],
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
+        .testTarget(name: "LocalDictationTests", dependencies: ["LocalDictation"]),
+        .testTarget(name: "MoonRenderingTests", dependencies: ["MoonRendering", "DictationCore"]),
         .testTarget(name: "DictationCoreTests", dependencies: ["DictationCore"]),
         .testTarget(name: "TextProcessingTests", dependencies: ["TextProcessing"]),
         .testTarget(name: "TranscriptHistoryTests", dependencies: ["TranscriptHistory"]),

@@ -21,7 +21,7 @@ import os
     @Published private(set) var lastMessage: String?
     /// Pause-all: the trigger and re-paste hotkeys do nothing until resumed.
     @Published private(set) var isPaused = false { didSet { publishTapState() } }
-    enum HotkeySuspensionReason: Hashable { case shortcutCapture, fixtureRecording }
+    enum HotkeySuspensionReason: Hashable { case shortcutCapture }
     private var hotkeySuspensionReasons: Set<HotkeySuspensionReason> = [] { didSet { publishTapState() } }
 
     func setHotkeysSuspended(_ suspended: Bool, for reason: HotkeySuspensionReason) {
@@ -36,8 +36,6 @@ import os
     private var hotkeys: HotkeyStateMachine
     private let recorder = AudioRecorder()
     private let headsUpDisplay = HeadsUpDisplayController()
-    private let notice = NoticePanelController()
-    private let fallback = FallbackPanelController()
     private let cues = CuePlayer()
     lazy var pipeline = TranscriptPipeline(settings: settings)
 
@@ -46,13 +44,14 @@ import os
         let identifier: UUID
         var trigger: Trigger
         var target: InsertionTarget?
-        let streaming: StreamingTranscription
+        let streaming: RecordingTranscription
     }
 
     /// A dictation that stopped recording and has not finished transcribing and inserting.
     private struct Delivery {
+        let appearance: HeadsUpDisplayController.StoppedAppearance?
         let task: Task<Void, Never>
-        let streaming: StreamingTranscription
+        let streaming: RecordingTranscription
     }
 
     private var recording: Recording?
@@ -79,6 +78,7 @@ import os
         self.model = model
         hotkeys = HotkeyStateMachine(configuration: settings.configuration.hotkeyConfiguration)
 
+        headsUpDisplay.onParkVisibilityChanged = { [weak self] in self?.publishTapState() }
         eventTap.onEvent = { [weak self] event in self?.handle(event) }
         eventTap.sharedState.publish(configuration: settings.configuration.hotkeyConfiguration)
         recorder.onLevel = { [weak self] level in
@@ -99,6 +99,9 @@ import os
             .store(in: &subscriptions)
         settings.$configuration.map(\.computeTarget).removeDuplicates().dropFirst()
             .sink { [weak model] in model?.setComputeTarget($0) }.store(in: &subscriptions)
+        model.$state.receive(on: RunLoop.main).sink { [weak self] _ in
+            self?.modelReadinessChanged()
+        }.store(in: &subscriptions)
         secureInput.$holder.sink { [weak self] holder in self?.secureInputChanged(holder) }.store(in: &subscriptions)
         installHotkeysWhenPermitted()
         let workspace = NSWorkspace.shared.notificationCenter
@@ -141,7 +144,7 @@ import os
     }
 
     private func publishTapState() {
-        eventTap.sharedState.publish(dictationActive: phase != .idle, paused: isPaused || !hotkeySuspensionReasons.isEmpty)
+        eventTap.sharedState.publish(dictationActive: phase != .idle || headsUpDisplay.isParked, paused: isPaused, suspended: !hotkeySuspensionReasons.isEmpty)
         hotkeys.isPaused = isPaused || !hotkeySuspensionReasons.isEmpty
     }
 
@@ -155,6 +158,13 @@ import os
             return
         default:
             break
+        }
+        guard hotkeySuspensionReasons.isEmpty else { return }
+        if event.kind == .keyDown && !event.isRepeat {
+            if event.keyCode == VirtualKey.letterV && ModifierSet(eventFlags: event.flags) == .command {
+                headsUpDisplay.observePaste(clipboardChangeCount: NSPasteboard.general.changeCount)
+            }
+            if event.keyCode == VirtualKey.escape && headsUpDisplay.isParked { headsUpDisplay.dismissPark() }
         }
         guard let input = event.hotkeyInput else { return }
         for action in hotkeys.handle(input) { perform(action) }
@@ -222,6 +232,7 @@ import os
 
     func repasteLastTranscript() {
         guard phase == .idle, let lastTranscript, let target = InsertionTarget.current() else { return }
+        headsUpDisplay.releasePark()
         Task {
             let outcome = await TextInserter.insert(lastTranscript, into: target)
             dictationLog.notice("re-paste into \(target.applicationName): \(String(describing: outcome))")
@@ -231,9 +242,6 @@ import os
     private func secureInputChanged(_ holder: SecureInputMonitor.Holder?) {
         if let holder {
             dictationLog.notice("secure input held by \(holder.applicationName)")
-            notice.show("Hotkeys paused: \(holder.applicationName) is holding secure input")
-        } else {
-            notice.hide()
         }
         objectWillChange.send()
     }
@@ -251,14 +259,8 @@ import os
 
     private func begin(_ trigger: Trigger) {
         guard recording == nil else { return }
-        guard permissions.microphoneGranted, model.isReady else {
+        guard permissions.microphoneGranted, model.isReady || model.state == .loading else {
             dictationLog.notice("start refused: microphone \(self.permissions.microphoneGranted), model \(self.model.statusDescription)")
-            if permissions.microphoneGranted, model.state == .loading {
-                // The model is loading, which happens at launch and after a change of compute target: show a brief
-                // message instead of opening a window.
-                showBriefly { headsUpDisplay.showMessage("Model loading…", on: NSScreen.screenWithMouse()) }
-                return
-            }
             NSSound.beep()
             lastMessage = permissions.microphoneGranted ? "The speech model is not ready." : "Microphone access is required."
             onRequiresAttention()
@@ -266,14 +268,27 @@ import os
         }
         let target = InsertionTarget.current()
         let identifier = UUID()
-        guard let streaming = model.makeStreamingTranscription(onActivity: { [weak self] activity in
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.speechActivityChanged(activity, recording: identifier) } }
-        }) else { return }
+        let maximumDuration = TimeInterval(settings.configuration.maximumRecordingMinutes * 60)
+        let streaming = RecordingTranscription(
+            maximumSamples: Int(maximumDuration) * SpeechAudioFormat.sampleRate,
+            stream: makeStream(recording: identifier),
+            onLimit: { [weak self] in
+                Task { @MainActor in
+                    guard self?.recording?.identifier == identifier else { return }
+                    self?.maximumDurationReached()
+                }
+            })
+        streaming.onModelUnavailable = { [weak self] in
+            guard let self else { return }
+            NSSound.beep()
+            self.lastMessage = "The speech model is unavailable. The recording is kept until it is ready or you cancel."
+            if self.recording == nil { self.updateHeadsUpDisplay() }
+        }
         do {
             try recorder.start(
                 deviceIdentifier: settings.configuration.inputDeviceIdentifier,
-                maximumDuration: TimeInterval(settings.configuration.maximumRecordingMinutes * 60),
-                consumer: { samples in streaming.append(samples) },
+                maximumDuration: maximumDuration,
+                consumer: { samples in streaming.audio.append(samples) },
                 onFirstAudio: { [weak self] in self?.microphoneDeliveredFirstAudio(recording: identifier) })
         } catch {
             streaming.cancel()
@@ -287,16 +302,15 @@ import os
         briefDisplayIdentifier = nil
         recording = Recording(identifier: identifier, trigger: trigger, target: target, streaming: streaming)
         dictationLog.notice("recording started (\(String(describing: trigger))) target \(target?.applicationName ?? "none")\(self.deliveries.isEmpty ? "" : ", \(self.deliveries.count) still transcribing")")
-        if let target, target.focusedElement == nil { completeTarget(target, recording: identifier) }
+        if let target, target.focusedElement == nil, target.setupTextTarget == nil { completeTarget(target, recording: identifier) }
         lastTranscript = nil
         lastMessage = nil
         updatePhase()
-        fallback.hide()
         headsUpDisplay.showListening(on: NSScreen.screenWithMouse())
         watchForSilentMicrophone()
     }
 
-    /// The recording keeps running under the warning, and the bars come back on their own with the sound.
+    /// The recording keeps running under the warning, and the moon returns when sound resumes.
     private func watchForSilentMicrophone() {
         microphoneSilence = MicrophoneSilenceMonitor(startTime: monotonicSeconds())
         microphoneSilenceTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
@@ -341,6 +355,8 @@ import os
         let held = recorder.elapsed
         let audioSeconds = recorder.finish()
         let stopTime = Date()
+        recording.streaming.stop()
+        headsUpDisplay.showTranscribing(waitingForResult: recording.streaming.beganDuringLoading)
         endRecording()
         dictationLog.notice("recording stopped: \(String(format: "%.2f", audioSeconds)) s of audio")
         cues.playStop(volume: settings.configuration.cueVolume)
@@ -357,6 +373,7 @@ import os
         }
         let identifier = recording.identifier
         let target = recording.target
+        let clipboardChangeCount = NSPasteboard.general.changeCount
         let previous = latestDelivery
         let task = Task { [weak self] in
             let result: StreamingTranscriptionResult
@@ -366,6 +383,7 @@ import os
                 guard let self, self.deliveries[identifier] != nil, !Task.isCancelled else { return }
                 await previous?.value
                 guard self.deliveries[identifier] != nil, !Task.isCancelled else { return }
+                NSSound.beep()
                 self.finishDelivery(identifier, message: error.localizedDescription)
                 return
             }
@@ -378,16 +396,41 @@ import os
             guard self.deliveries[identifier] != nil, !Task.isCancelled else { return }
             if let interruption {
                 guard !result.text.isEmpty else { return self.finishDelivery(identifier, message: interruption.localizedDescription) }
+                if streaming.beganDuringLoading {
+                    await self.deliver(result.text, audioSeconds: result.audioSeconds, target: target, delivery: identifier,
+                                       recovery: .microphoneDisconnected, clipboardChangeCount: clipboardChangeCount)
+                    return
+                }
                 self.lastTranscript = result.text
-                self.showFallback(result.text, reason: interruption.localizedDescription, onClipboard: true, delivery: identifier)
+                self.showMiss(result.text, reason: .microphoneDisconnected, onClipboard: true, delivery: identifier)
                 return
             }
-            await self.deliver(result.text, audioSeconds: result.audioSeconds, target: target, delivery: identifier)
+            await self.deliver(result.text, audioSeconds: result.audioSeconds, target: target, delivery: identifier,
+                               recovery: streaming.requiresRecovery ? .modelUnavailable : nil,
+                               clipboardChangeCount: clipboardChangeCount)
         }
-        deliveries[identifier] = Delivery(task: task, streaming: streaming)
+        deliveries[identifier] = Delivery(appearance: headsUpDisplay.stoppedAppearance, task: task, streaming: streaming)
         latestDelivery = task
         updatePhase()
         updateHeadsUpDisplay()
+    }
+
+    private func makeStream(recording identifier: UUID) -> StreamingTranscription? {
+        model.makeStreamingTranscription(onActivity: { [weak self] activity in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.speechActivityChanged(activity, recording: identifier) }
+            }
+        })
+    }
+
+    private func modelReadinessChanged() {
+        var pending = deliveries.map { ($0.key, $0.value.streaming) }
+        if let recording { pending.append((recording.identifier, recording.streaming)) }
+        for (identifier, transcription) in pending where transcription.needsModel {
+            if model.isReady, let stream = makeStream(recording: identifier) { transcription.modelReady(stream) }
+            else if case .failed = model.state { transcription.modelUnavailable() }
+        }
+        if recording == nil { updateHeadsUpDisplay() }
     }
 
     /// Asks again for the focused element every 250 ms during the first 3 s of recording, for applications that build
@@ -419,7 +462,8 @@ import os
 
     /// Delivers the transcript of `delivery` into the target captured when it was recorded. After every suspension it
     /// checks that the delivery was not cancelled, so a cancelled dictation never inserts.
-    private func deliver(_ rawText: String, audioSeconds: Double, target: InsertionTarget?, delivery: UUID) async {
+    private func deliver(_ rawText: String, audioSeconds: Double, target: InsertionTarget?, delivery: UUID,
+                         recovery: DictationMiss? = nil, clipboardChangeCount: Int? = nil) async {
         guard !rawText.isEmpty else {
             finishDelivery(delivery, message: "No speech was recognized.")
             return
@@ -431,15 +475,33 @@ import os
             return
         }
         let text = prepared.finalText
+        if target?.wasSecure == true {
+            showMiss(text, reason: .secureField, onClipboard: false, delivery: delivery)
+            return
+        }
         // History and transcript files are written after insertion, and never for text a password field refused.
         let record = {
             await self.pipeline.record(
                 rawText: rawText, finalText: text, durationSeconds: audioSeconds, applicationName: target?.applicationName,
                 bundleIdentifier: target?.bundleIdentifier, style: prepared.profile)
         }
+        if let recovery {
+            if let target, target.focusedElement.map({
+                Accessibility.describe($0, processIdentifier: target.processIdentifier).isSecure
+            }) == true {
+                showMiss(text, reason: .secureField, onClipboard: false, delivery: delivery)
+                return
+            }
+            lastTranscript = text
+            if let clipboardChangeCount { TextInserter.placeOnClipboardIfUnchanged(text, since: clipboardChangeCount) }
+            let copied = NSPasteboard.general.string(forType: .string) == text
+            showMiss(text, reason: copied ? recovery : .clipboardChanged, onClipboard: false, delivery: delivery)
+            if recovery != .microphoneDisconnected { await record() }
+            return
+        }
         guard let target else {
             lastTranscript = text
-            showFallback(text, reason: "No text field had focus", onClipboard: true, delivery: delivery)
+            showMiss(text, reason: .noTextField, onClipboard: true, delivery: delivery)
             await record()
             return
         }
@@ -449,19 +511,18 @@ import os
         switch outcome {
         case .inserted(let method):
             dictationLog.notice("inserted into \(target.applicationName) by \(method.rawValue) with profile \(prepared.profile.rawValue)")
-            if prepared.submitsWithReturn && target.isStillFocused() { TextInserter.postKey(36, flags: []) }
             finishDelivery(delivery, message: nil)
         case .refusedSecureField:
-            showFallback(text, reason: "Password fields are not dictated into", onClipboard: false, delivery: delivery)
+            showMiss(text, reason: .secureField, onClipboard: false, delivery: delivery)
         case .noEditableFocus:
-            showFallback(text, reason: "No text field had focus", onClipboard: true, delivery: delivery)
+            showMiss(text, reason: .noTextField, onClipboard: true, delivery: delivery)
         case .targetChanged:
-            showFallback(text, reason: "Focus moved before the text was inserted", onClipboard: true, delivery: delivery)
+            showMiss(text, reason: .focusMoved, onClipboard: true, delivery: delivery)
         case .unconfirmed(let clipboard):
             if case .writeIfUnchanged(let changeCount) = clipboard {
                 TextInserter.placeOnClipboardIfUnchanged(text, since: changeCount)
             }
-            showFallback(text, reason: "The text could not be confirmed as inserted", onClipboard: false, delivery: delivery)
+            showMiss(text, reason: NSPasteboard.general.string(forType: .string) == text ? .unconfirmed : .clipboardChanged, onClipboard: false, delivery: delivery)
         case .cancelled:
             return
         }
@@ -469,20 +530,22 @@ import os
         case .refusedSecureField, .cancelled:
             break
         case .inserted, .noEditableFocus, .targetChanged, .unconfirmed:
-            // Kept until the next dictation so it can be re-pasted or copied from the menu.
+            // Kept until the next dictation so it can be pasted again.
             lastTranscript = text
             await record()
         }
     }
 
-    private func showFallback(_ text: String, reason: String, onClipboard: Bool, delivery: UUID) {
+    private func showMiss(_ text: String, reason: DictationMiss, onClipboard: Bool, delivery: UUID) {
         if onClipboard { TextInserter.placeOnClipboard(text) }
-        fallback.show(text: text, reason: reason)
-        finishDelivery(delivery, message: reason + ".")
+        let changeCount = reason != .secureField && NSPasteboard.general.string(forType: .string) == text ? NSPasteboard.general.changeCount : nil
+        let appearance = deliveries[delivery]?.appearance
+        finishDelivery(delivery, message: nil)
+        headsUpDisplay.showPark(reason: reason, appearance: appearance, clipboardChangeCount: changeCount,
+                                pasteShortcut: settings.configuration.repasteChord?.displayName)
     }
 
-    /// The text is in the target. The display goes away now, not when the clipboard is restored a moment later, unless
-    /// a newer dictation is recording or still transcribing.
+    /// Text delivery does not shorten the indicator's smoke or disturb a newer recording.
     private func deliveryLanded(_ delivery: UUID) {
         guard briefDisplayIdentifier == nil, recording == nil, deliveries.count == 1, deliveries[delivery] != nil else { return }
         headsUpDisplay.hide()
@@ -497,7 +560,10 @@ import os
         switch phase {
         case .idle: headsUpDisplay.hide()
         case .recording: headsUpDisplay.showListening(on: NSScreen.screenWithMouse())
-        case .transcribing: headsUpDisplay.showTranscribing()
+        case .transcribing:
+            let active = deliveries.values.filter { $0.streaming.state != .retained }
+            if active.isEmpty { headsUpDisplay.hide() }
+            else { headsUpDisplay.showTranscribing(waitingForResult: active.contains { $0.streaming.beganDuringLoading }) }
         }
     }
 
@@ -550,8 +616,6 @@ import os
         updatePhase()
     }
 
-    func copyLastTranscript() {
-        if let lastTranscript { TextInserter.placeOnClipboard(lastTranscript) }
-    }
+
 
 }

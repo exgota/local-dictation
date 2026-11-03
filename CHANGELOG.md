@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1 (November 3, 2026)
+
+- The indicator is a dithered moon that swells as you talk. Setup, the menu and the app icon use the same moon.
+- Setup goes one step at a time: microphone, Accessibility, the speech model download, then a place to try it.
+- Settings is a single page. History opens in its own window. Corrections and App Exceptions open as sheets, and
+  corrections are edited in a table instead of a text file.
+- After setup, you can dictate while the speech model is still loading. The recording waits in memory and is typed once
+  the model is ready.
+- A parked moon replaces the copy panel. When text cannot be typed, ⌘V or Paste last text recovers it. If the app could
+  not confirm the text was typed, check the field first, because it may already be there.
+- Fewer failed insertions in apps that rebuild their text field while you talk.
+- The menu shows what the app is doing, and adds Show history and Open at login.
+- A lock on the menu bar icon shows when another app holds secure input. This replaces the on-screen banner.
+- The app checks for updates on its own and asks before installing one.
+- Requires macOS 27.
+- Removed: automatic sending in chat apps, and the separate text styles. Formatting is now one checkbox, Remove fillers
+  and format text, with per-app choices under App Exceptions.
+
 ## 1.0.2 (October 31, 2026)
 
 - Long recordings use overlapping speech windows to join words across boundaries.

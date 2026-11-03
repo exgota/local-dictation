@@ -31,9 +31,9 @@ public enum TranscriptProfile: String, Codable, CaseIterable, Sendable {
     /// Verbatim text; only vocabulary corrections, when enabled.
     case verbatim
     /// Conversational text: scratch that, spoken punctuation, filler removal, capitalization and terminal punctuation,
-    /// plus vocabulary corrections when enabled. May submit with Return (see `submitsWithReturn`).
+    /// plus vocabulary corrections when enabled.
     case chat
-    /// Verbatim text for terminals and editors; never submits with Return.
+    /// Verbatim text for terminals and editors.
     case code
     /// Produces no text (password managers).
     case suppressed
@@ -64,11 +64,7 @@ public enum TranscriptProfile: String, Codable, CaseIterable, Sendable {
         }
     }
 
-    /// Whether to press Return after inserting. Returns `userPreference` for `.chat` and false for every other
-    /// profile, so `.code` never submits.
-    public func submitsWithReturn(userPreference: Bool) -> Bool {
-        self == .chat && userPreference
-    }
+
 }
 
 /// Chooses a profile from the frontmost application's bundle identifier.

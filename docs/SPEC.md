@@ -1,10 +1,9 @@
 # Local Dictation: specification
 
-Local Dictation is a macOS menu-bar app that turns speech into text and inserts the text where the cursor was. By
-default the user presses the Fn (Function) key, speaks, and presses Fn again. Speech recognition runs on the Mac, on
+Local Dictation 1.1 requires macOS 27 or later on Apple Silicon. It is a menu-bar app that turns speech into text and
+inserts the text where the cursor was. By default the user presses the Fn (Function) key, speaks, and presses Fn again. Speech recognition runs on the Mac, on
 Core ML (Apple's on-device machine-learning framework), with Underdog Bark 3.0 Pro, a derivative of the 0.6 billion
-parameter model Parakeet TDT (token-and-duration transducer). After the one-time model download the app opens no
-network connection.
+parameter model Parakeet TDT (token-and-duration transducer). Speech and audio remain local. Network access downloads the models and checks for and downloads app updates from GitHub.
 
 The measurements in the table below describe the 1.0.1 release on one Mac running macOS 27 on October 26, 2026.
 They do not measure the overlapping-window implementation.
@@ -52,6 +51,7 @@ Silero is the VAD model and Bark is the speech model.
 | `DictationEngine` | Model download, validation, compilation, transcription, VAD, streaming | `ModelManifest.swift`, `ModelStore.swift`, `SpeechTranscriber.swift`, `StreamingTranscription.swift` |
 | `TextProcessing` | Deterministic text cleanup and per-app profiles | `TranscriptProcessor.swift`, `VocabularyCorrections.swift`, `TranscriptProfile.swift` |
 | `TranscriptHistory` | SQLite history | `TranscriptHistoryStore.swift` |
+| `MoonRendering` | Shared Metal drawing, surface maps, native canvas and deterministic offscreen captures | `MoonRenderer.swift`, `MoonCanvasView.swift`, `Moon.metal` |
 | `LocalDictation` | The app: controller, event tap, audio capture, text insertion, interface | `Session/DictationController.swift`, `Hotkeys/HotkeyEventTap.swift`, `Recording/AudioRecorder.swift`, `Insertion/TextInserter.swift`, `Settings/SettingsWindow.swift`, `Display/HeadsUpDisplay.swift` |
 
 ### Threads
@@ -69,8 +69,9 @@ Silero is the VAD model and Bark is the speech model.
 1. The user presses and releases Fn with no other key between the two events. In toggle mode, the default,
    `HotkeyStateMachine` then emits `toggle`. Hold modes are described under Hotkeys.
 2. `DictationController` records the focused app and its focused Accessibility (AX) element, starts an
-   `AVCaptureSession` (the AVFoundation capture session) and a `StreamingTranscription`, and shows the HUD (heads-up
-   display). The start cue plays once the microphone delivers its first samples, so speech after the cue is never
+   `AVCaptureSession` (the AVFoundation capture session), and shows the HUD (heads-up display). A `RecordingTranscription`
+   starts `StreamingTranscription` immediately when the model is ready. During loading it accepts audio into memory
+   first, then hands the buffered and live samples to the same streaming worker in capture order. The start cue plays once the microphone delivers its first samples, so speech after the cue is never
    clipped. The microphone is on from this step until step 5.
 3. The capture queue passes samples to the streaming worker, which evaluates 4096-sample (256 ms) frames with
    Silero. Speech starts at probability 0.5. After speech, the worker uses a 0.35 continuation threshold while no
@@ -88,12 +89,29 @@ Silero is the VAD model and Bark is the speech model.
 6. `TranscriptPipeline` applies the profile of the target app (see Text processing). `TextInserter` then checks that the
    same element still has focus and inserts the text.
 7. The app writes the text to the history and to `~/Desktop/Transcripts/<date>/<time> <first words>.md`, each only when
-   turned on. It writes after insertion, or after the fallback panel appears. A password-field refusal, a cancellation,
+   turned on. It writes after insertion, or after the parked moon appears. A password-field refusal, a cancellation,
    the Suppressed profile and a recording cut short by a capture failure write nothing.
 
 Fn pressed while an earlier dictation is still transcribing or inserting starts the next dictation at once. The press
 is never ignored. Only one dictation records at a time. Earlier dictations keep transcribing and insert into their own
 targets, and each waits for the dictation before it, so text arrives in the order it was spoken.
+
+Recording does not wait for an installed model to finish loading. Buffered audio uses the existing recording limit,
+with a sample-count cap as well as the recorder's duration timer. At 16 kHz Float32, the maximum 60-minute setting
+holds at most 230,400,000 sample bytes per recording, excluding container overhead. Audio never reaches disk.
+When the model becomes ready before stop, transcription catches up while capture continues. When stop comes first,
+the completed recording waits, with the transcribing moon visible, and then uses the same focused-field validation,
+text processing, insertion and Park paths as any other dictation.
+
+A model load failure or 120-second wait from recording start ends the active wait and plays the existing failure
+sound. It retains the audio in memory until a later successful model load, cancellation or app exit. Capture already
+in progress continues within its original limit. No transcript can be recovered until a model is available. Once it
+recovers, these recordings retain their delivery order and use Park instead of automatic insertion. Recovery respects
+suppressed profiles and secure fields. It copies only if the clipboard has not changed since stop; otherwise Paste
+last text retains the result. Escape cancels retained recordings under the same rule as pending transcriptions.
+Sleep ends capture, microphone interruption preserves the partial recording for Park, and another trigger press while
+waiting starts a new recording without replacing the earlier one. Silence auto-stop starts evaluating speech once the
+model is ready; the recording limit and Escape work throughout loading.
 
 Escape cancels the recording if one is running. Otherwise it cancels every dictation that is still transcribing. Each
 dictation has an identifier. A transcription that finishes after its dictation was cancelled never inserts.
@@ -156,8 +174,9 @@ and downloaded with it.
 - When macOS disables the tap, for a timeout or by user input, the callback re-enables it at once and the main thread
   logs the event.
 - Secure Event Input is a macOS mode that an app enables to keep key events from other processes. While another app
-  holds it, event taps receive no key events, so the hotkeys cannot work. The app polls for it every second and shows a
-  banner that names the holding app.
+  holds it, event taps receive no key events, so the hotkeys cannot work. The app polls for it every second, including
+  while the menu is open, and adds a lock badge to the waveform menu-bar icon. The menu says “Shortcuts blocked” and
+  names the application using secure input. No on-screen notice appears.
 - The app reinstalls the tap after the Mac wakes from sleep. It disables App Nap (the macOS feature that throttles idle
   apps) by starting an activity with the option `userInitiatedAllowingIdleSystemSleep`, which still lets the Mac sleep.
 
@@ -166,9 +185,8 @@ and downloaded with it.
 `TextInserter` probes the focused AX element, and `InjectionPlanner` chooses the insertion methods from the result:
 
 - Password fields (`AXSecureTextField`) are refused, and so is any element of an app that holds Secure Event Input. The
-  fallback panel, a floating panel that shows the text with a Copy button, appears. The app does not place the text on
-  the clipboard.
-- No editable element: the fallback panel shows the text, and the text is also placed on the clipboard.
+  parked satellite withdraws behind the main moon. The app does not copy or keep the text.
+- No editable element: the satellite parks beside the main moon, and the text is placed on the clipboard.
 - `AXSelectedText` settable and the value readable: insert through Accessibility first, then paste.
 - Otherwise: paste.
 
@@ -178,7 +196,7 @@ Each method returns one of three results:
 - Not delivered: the text demonstrably did not arrive, because the field reads back unchanged.
 - Uncertain: something was sent that may still arrive.
 
-The chain moves to the next method only after "not delivered". After "uncertain" it stops and shows the fallback panel,
+The chain moves to the next method only after "not delivered". After "uncertain" it stops and shows the parked moon,
 so the text is never inserted twice.
 
 Accessibility insertion sets `AXSelectedText` and reads the field back for up to 0.5 s. Chromium-based browsers and
@@ -195,12 +213,18 @@ the first read and serves later reads from its own copy, so a clipboard manager 
 read. The app therefore restores the user's previous clipboard once the field shows the text, or 1 s after the first
 read where the field cannot be read, unless another process wrote to the clipboard in the meantime. If no process reads the data within 1.5 s, the Cmd-V may still be
 handled late. The transcript then stays on the clipboard, never the previous contents, which a late paste would insert,
-and the fallback panel shows it. The chain has no typing step, because after an unread paste, typing could insert the
+and the satellite parks beside the main moon. The chain has no typing step, because after an unread paste, typing could insert the
 text twice.
 
-Before each method the app checks that the same app and the same AX element still have focus, comparing the elements
-with `CFEqual`. If focus has moved, the fallback panel shows the text. No method starts while a different field has
-focus.
+Before each method the app resolves the currently focused element against the recording-time target. The same
+frontmost process and `CFEqual` element identity remain the fast path, with a window mismatch rejected. A replacement
+object requires the same window and immediate parent by `CFEqual`, identical role, subrole, AX identifier, DOM
+identifier, placeholder, frame and sibling index, and at least one nonempty identifier or placeholder. Its fingerprint
+must be unique among the parent's children (bounded to 256). Missing or ambiguous evidence refuses insertion.
+Snapshots exclude text and selection. The current matched object is used for insertion and read-back, and secure or
+noneditable replacements are refused before each attempt. Parent recreation, layout changes and unnamed fields can
+still cause conservative fallback. Replacement during an unconfirmed Accessibility attempt cannot prove non-delivery
+from the stale object's unchanged value, so it stops as uncertain without a paste retry. The parked moon offers recovery without displaying transcript text.
 
 ## Text processing
 
@@ -224,7 +248,7 @@ identifier. Per-app overrides in the settings take precedence over this table.
 | Profile | Apps | Steps |
 |---|---|---|
 | Verbatim (default) | everything not listed | vocabulary corrections only, and only when turned on |
-| Chat | Slack, Discord, Messages, Telegram, WhatsApp | all steps (vocabulary corrections only when turned on); presses Return after inserting only when turned on |
+| Chat | Slack, Discord, Messages, Telegram, WhatsApp | all steps (vocabulary corrections only when turned on) |
 | Code | Terminal, iTerm2, Warp, Ghostty, VS Code, Cursor, Zed, Xcode | as Verbatim; never presses Return |
 | Suppressed | 1Password, Bitwarden, Passwords, Dashlane, LastPass, KeePassXC | nothing is inserted |
 
@@ -235,37 +259,217 @@ not exist. A file that does not parse is left untouched, and the app uses the bu
 
 ## Interface
 
-Settings is a standard macOS preferences window with one tab per toolbar item. Each tab is a SwiftUI `Grid` sized to its
-content, with no scroll view. Spacing comes from a scale of 4, 8, 12, 20 and 24 pt (`SettingsLayout`). The window uses
-system fonts and colors, in Light and Dark appearance.
+Settings is one 500 pt page of native controls. A single grid aligns trailing labels and leading controls, with 8 pt
+row spacing and 24 pt between groups. The shared wide control width is measured from the longest recording behavior;
+short values and shortcut fields are 150 pt wide. Shortcuts use native button bezels. Capturing a shortcut temporarily
+passes all keys, including the configured pause chord and Escape, through the global tap to the recorder.
 
-| | Light | Dark |
-|---|---|---|
-| General | ![](screenshots/settings-general-light.png) | ![](screenshots/settings-general-dark.png) |
-| Hotkey | ![](screenshots/settings-hotkey-light.png) | ![](screenshots/settings-hotkey-dark.png) |
-| Audio | ![](screenshots/settings-audio-light.png) | ![](screenshots/settings-audio-dark.png) |
-| Text | ![](screenshots/settings-text-light.png) | ![](screenshots/settings-text-dark.png) |
-| History | ![](screenshots/settings-history-light.png) | ![](screenshots/settings-history-dark.png) |
-| About | ![](screenshots/settings-about-light.png) | ![](screenshots/settings-about-dark.png) |
-| Setup (first run) | ![](screenshots/setup-light.png) | ![](screenshots/setup-dark.png) |
-| HUD, listening (the same in Light and Dark) | ![](screenshots/hud-listening.png) | |
-| HUD, transcribing (the same in Light and Dark) | ![](screenshots/hud-transcribing.png) | |
+The page contains dictation key and behavior, Paste last text, Pause all shortcuts, microphone, dictation sounds,
+silence stop, recording limit, text formatting, corrections, app exceptions, history, and transcript files. Unformatted
+profiles remain distinct in the existing file format but both appear unchecked under “Remove fillers and format text”.
+Text insertion never presses Return. An older saved submission preference has no effect.
 
-The HUD is a dark pill of 124 × 50 pt in a non-activating panel, which is a window that does not make its app active.
-The panel sits at the bottom of the screen that holds the mouse pointer and can never take focus.
+Permissions and speech-model notices appear only when attention or installation progress is needed. They use the
+live permission monitor and model controller. Open at login is in the status menu. There is no About view or menu item;
+Finder's Get Info retains the speech-model copyright credit in `Info.plist`.
 
-While recording, the pill shows 20 blue (`#0a84ff`) bars that rise and fall in place with the voice. All bars follow one
-smoothed loudness, and each bar scales it by a fixed offset. The smoothing takes about 60 ms to rise and 90 ms to fall. Below
--50 dBFS (decibels relative to full scale), which the app treats as room noise, the bars stay still. If the level stays
-at or below -100 dBFS for 3 s, or no audio arrives at all, the bars ease to rest and dim around a crossed-out microphone
-icon. Recording continues, and the bars return when the sound does. If the default or selected microphone is unavailable
-at the start, the same warning appears immediately for 1.5 s, and the menu reports the error. No recording starts. If a
-capture is interrupted during recording, its existing interruption handling still applies. When recording stops, the
-bars freeze where they are and dim until the text lands. The pill then disappears without waiting for the clipboard restore. It scales and fades in over 150 ms and out over 120 ms.
+Corrections opens a table over the existing `vocabulary.json` format. Replace shows every mishearing, comma-separated.
+Both columns show the full cell text in a native hover tooltip, so clipped corrections remain readable.
+Untouched forms round-trip without normalization, including when only their replacement is edited. Done writes
+atomically. Unreadable files and concurrent external edits are reported without overwriting them.
 
-The pill shows no text except "Model loading…", which appears when the trigger is pressed before the model is ready. The
-menu bar icon does not change while dictating; it changes only when setup is needed. The start and stop sounds are
-synthesised cues bundled with the app, played at an adjustable volume. See [audio/](audio/).
+App Exceptions lists installed built-in applications and all saved overrides in alphabetical order, with their real
+application icons when available. Unformatted, Formatted, and Do Not Insert map to the existing profiles. Built-in
+entries can be overridden but cannot be removed. Uninstalled custom entries keep their identifier and a generic icon.
+
+History opens from Settings or, while enabled, from the status menu. Its list has no row separators or alternating
+backgrounds. The selected dictation appears in full below, with selectable text, Add Correction, and Copy. Add Correction
+starts with the selected words. Clear History requires confirmation. Empty states are No Dictations and No Selection.
+The existing SQLite archive and Markdown format are unchanged, and history remains off by default.
+
+![Settings in Dark appearance](screenshots/settings-dark.png)
+![Corrections in Dark appearance](screenshots/corrections-dark.png)
+![App Exceptions in Dark appearance](screenshots/app-exceptions-dark.png)
+![History in Dark appearance](screenshots/history-dark.png)
+
+These are offscreen captures of the production views with synthetic content, not the owner's settings or dictations.
+
+### Recording indicator
+
+The HUD is a 56 × 56 pt circular coin in a non-activating, mouse-transparent panel. It sits 32 pt above the bottom
+of the visible screen containing the pointer, appears on every Space and over full-screen applications, and never
+becomes key. Its surface is `rgba(20,20,20,0.94)`, with a 1 pt white edge at 8% opacity and a soft shadow. It fades in
+for 150 ms along the cubic curve `(0.16,1,0.3,1)`, without scaling.
+
+The moon uses binary 4 × 4 Bayer ordered dithering. At 2× backing scale, one dot is one device pixel, or half a point.
+Lit dots are RGB `(0.96,0.96,0.95)`. The normalized radius starts at 0.42 and grows by `0.2 × level^0.7`, with the
+approved angular ripples. The microphone's -50 to -20 dBFS range maps to levels 0 to 1. Rise and fall time constants
+are 25 and 40 ms. The drawing has no text.
+
+At or below -100 dBFS for 3 s, or with no arriving audio, the same shader reshapes the moon into a struck microphone.
+The warning approaches its target with a 75 ms time constant. Recording continues, and live sound restores the moon.
+An unavailable microphone at the start shows the warning for 1.5 s without starting capture.
+
+Stopping captures the currently lit dots. Each dot rises and curls along the approved deterministic smoke path.
+The coin starts fading at 279 ms and is gone at 450 ms. Successful delivery cannot shorten, prolong or restart that animation. A miss transfers its particles into Park.
+A new recording interrupts the smoke immediately. Stopping under the silent-microphone warning uses a 120 ms fade
+instead. A recording too short to transcribe still gets the normal stop animation.
+
+Pressing the trigger while the installed model loads starts capture and shows the normal listening moon, including
+its microphone level and silence warning. Stopping a recording that began during loading captures its appearance for
+Park and shows the text-free transcribing orbit until the result arrives, a failure occurs, or it is cancelled.
+The orbit has no refusal shake or automatic 4.2-second dismissal. VoiceOver receives “Transcribing”. A new recording
+immediately restores listening. Recordings started with a ready model retain the normal 450 ms stop animation.
+
+The Metal pipeline warms at application launch, before setup or the recording indicator can appear. Each window's
+moon canvas draws its first frame while the window is still hidden. Its canvas owns a 60 Hz timer only while requested and
+while its window is visible and unoccluded. Hiding, closing, detaching or occluding the canvas stops that timer.
+The adjustable start and stop cues are unchanged.
+
+### Setup
+
+The setup window is 420 pt wide, with a hidden title bar and system window background, text colors and buttons.
+A centered 240 × 240 pt setup moon sits above one semibold title3 headline, one optional secondary line and one large
+default action. Copy cross-fades with a 6 pt rise over 0.3 s ease-out. Reduce Motion removes the rise and step animation.
+Installation-location and signing warnings use a plain secondary line above the headline, without a tinted container.
+
+The four steps follow live permission and model state:
+
+1. Microphone: shape 1, “Local Dictation needs your microphone”, Allow Microphone. Denial shows “Microphone access is
+   off”, “Turn it on in System Settings.” and Open System Settings.
+2. Accessibility: shape 2, “Let Local Dictation type for you”, “Turn it on in Accessibility settings.” and Open System
+   Settings. After the click, the line becomes “Turn on Local Dictation, then come back.” The action stays disabled
+   until access is granted or this window becomes key again. Permission status refreshes on return and every second.
+3. Download: shape 0, “Getting the speech model”, and the percentage of the combined pinned speech and voice-activity
+   manifests, formatted in decimal GB to one fractional digit. Download starts automatically once both permissions
+   are granted. Failure shows “The download stopped”, “It picks up where it left off.” and Try Again. Failures never
+   retry automatically, and the moon keeps its last download progress. Progress stays capped at 99% until the model
+   finishes compilation and loading.
+4. Try it: the completion ring, “Press Fn and say something”, “Press Fn again when you’re done.”, a real single-line
+   text field and Done. Both lines use the configured trigger's display name. Hold modes say Hold and Release.
+   During recording the secondary line is “Listening…”. The field receives focus on entry and on window return.
+   Dictation still uses the normal capture, transcription, processing and history path. This in-process field uses
+   its native Accessibility selected-text setter, verifies the result and preserves the clipboard. Delivery checks
+   that the original field and editor still have focus. It never copies a previous or simulated transcript into setup.
+
+The try-it action area grows to fit the field and Done; the approved prototype's fixed 48 pt area clips the button.
+The remaining spacing and copy match the prototype. Diagnostics-only `--render-setup DIRECTORY` renders thirteen
+production states in dark appearance at 2× without starting application services. The shader time and shape transition
+are pinned for comparison. [BUILD.md](../BUILD.md#setup-comparison-renders) documents the command and its limits.
+
+The setup window opens only after its moon tile has drawn a frame, then fades in over 0.22 s with ease-out. Reduce
+Motion makes the entrance immediate. Bringing an already visible setup window forward does not restart the fade.
+
+The Function key carries the small “fn” at upper right and the globe at lower left; the back-face texture reverses
+its horizontal coordinate so the legend remains readable from either side.
+
+The objects rotate at 1.15 radians per second. A shape change takes 950 ms with cubic ease-in/ease-out. The shader
+adds one complete rotation during that change. The moon's surface develops in quantized grains, with bright highlands
+arriving before the dark seas. Incoming specks follow thirty angular streams. A scan line crosses the moon near the
+end of progress. Real downloaded-byte progress feeds the drawing, capped at 99% until the model is ready. At readiness,
+the completion ring expands over 800 ms; after 1.8 s the tile changes back to the Function key.
+
+The NASA CGI Moon Kit LROC albedo and LOLA elevation are packed into a 1024 × 512 texture. Red is rounded luminance
+`0.2126 R + 0.7152 G + 0.0722 B`; green is elevation; alpha is 255; the rows are reversed. The original generated mip
+levels and Function-key legend are bundled so image decoding and mip generation do not differ between renderers.
+NASA is credited in `Packaging/NOTICE`.
+
+Reduce Motion follows the approved code: the general shader clock freezes at two seconds. Voice-level changes,
+explicit shape transitions and smoke still advance. The transcribing orbit uses the frozen shader clock under Reduce Motion.
+Park has a separate reduced-motion treatment: stationary dots with a 150 ms fade, without travel, bobbing, or shaking.
+
+### Park
+
+Every insertion miss uses the same text-free coin. Its upper smoke particles gather into a smaller satellite beside
+the main moon over 500 ms, following cubic Hermite paths with their existing velocities. The satellite floats while
+waiting. A manual Command-V of the current dictation or Paste last text launches it upward; timeout or Escape withdraws
+it behind the main moon. Hover pauses the timeout. Secure-field refusals withdraw the satellite and shake the main
+moon without retaining text. Newer clipboard contents are never replaced by an unconfirmed delivery.
+
+Each delivery retains its own stopped bitmap and screen. A late failure returns particles from above the coin. A new
+recording replaces Park immediately; a failure arriving during another recording waits until that recording's smoke
+has cleared. Consecutive misses replace the previous parked presentation. VoiceOver receives a reason and recovery
+instruction for focus moved, no field, unconfirmed insertion, newer clipboard, secure field, and microphone interruption.
+
+### Shader start-up
+
+The renderer compiles `Moon.metal` from source at launch, before setup or the pill can first appear. A cold first
+compile measured 646 ms on the 8 GB MacBook and about 25 ms afterwards. The startup timing flag `--measure-moon-startup` is available only under `DEBUG` or `MOON_DIAGNOSTICS`.
+
+### Menu and icon
+
+The menu is an `NSMenu`. A 30 pt moon and one line of current state form its 32 pt header, updated while the menu is
+open. Each coin is a fixed 60 × 60 pixel bitmap with one-pixel 8 × 8 ordered dither and RGB `(242,242,239)` dots.
+Ready uses the 40 px full moon; Listening and Transcribing use a 42 px full moon with a 0.14 halo ending at 1.2 radii.
+Model loading and installation use a 40 px crescent. Shortcuts paused and Shortcuts blocked use a 40 px new moon. Images are drawn without
+interpolation. A second line appears only for a current problem, increasing the header to 43 pt. A separator follows the header. Commands are Start dictation (Stop dictation while recording), Paste
+last text, Show history when history is enabled, and Pause all shortcuts or Resume all shortcuts. After one more
+separator: Install update… only while a scheduled update awaits attention, Open at login with its checkmark,
+Settings, and Quit Local Dictation. Install update… calls Sparkle's `checkForUpdates` to bring the standard alert
+into focus. The configured trigger and paste shortcut appear beside their commands; Settings and Quit retain native
+`⌘,` and `⌘Q` equivalents. Paste stays visible but disabled when no transcript is available.
+
+While another application uses secure input, the waveform has a small lower-right lock badge, separated by a clear
+cutout. Both icons are template images that follow the menu-bar appearance. Releasing secure input restores the
+ordinary icon. The header reads “Shortcuts blocked” with “<App name> is using secure input” beneath it, or “Another app
+is using secure input” for an unknown holder or `loginwindow`. Clicking the lock icon opens the menu, including when
+setup also needs attention. Other setup errors retain the click-to-open-setup behavior.
+
+`Tools/GenerateApplicationIcon.swift` generates `Packaging/AppIcon.icns`. It renders a 64 × 64 dithered moon through
+the application renderer, enlarges those dots without smoothing into an 896 × 896 area at `(64,64)` on one 1024 px
+master, and reduces that master by successive halves for every smaller size. The approved rounded gradient surface
+is retained as `IconSurface.png`: radius 230 px, gradient `#2a2a2d` to `#0e0e0f`, and a 4 px white border at 10% opacity.
+The same 1024 px master supplies every icon representation; smaller sizes are never redrawn as different moons.
+
+### Visual verification
+
+Debug builds accept `--render-moon-parity STATES.json DIRECTORY` before constructing any application services.
+It renders the live Metal shader offscreen at the requested scale, uses the same smoke implementation, and exports PNGs.
+`--render-moon-tones STATES.json DIRECTORY` exports the pre-dither tone as a packed 24-bit value for precision checks.
+`--benchmark-moon` measures the same drawing and layer-update path with synthetic levels and a detached idle canvas.
+These entry points also exist in an optimized measurement build with `-DMOON_DIAGNOSTICS`; they do not connect to a
+running instance, record audio, or access transcription settings.
+
+Debug builds also accept `--render-interface DIRECTORY` and `--render-park-parity STATES.json DIRECTORY`. The former
+uses the production SwiftUI views with temporary settings and synthetic entries, without constructing application
+services. Its menu image uses the real menu model and header with AppKit text and separators; it does not capture
+native menu tracking or compositor vibrancy. The latter exercises the same Park renderer as the live coin.
+
+Park matched the approved drawing in all 337 captured bitmap states, including every miss case, timeout and paste
+exits, late arrival, and 1×/2× rendering. Occupancy and RGBA differences were zero; the largest opacity difference was
+1.11 × 10⁻¹⁶. Reduced Motion is separately checked for stationary pixels and opacity-only entry and exit.
+
+The shader fixes its sine/cosine approximation and the thirty angular stream seeds to avoid backend-dependent grain
+and trajectory changes. Texture interpolation runs at full precision. Remaining isolated dither and grain-boundary
+flips are measured separately from color rounding in scaled icons. Pixel captures, comparison reports and performance measurements live outside the repository. Offscreen
+parity does not establish native window placement, menu tracking, spoken VoiceOver output, or total CPU while recording;
+those require a signed desktop-session check.
+
+## Automatic updates
+
+Starting in 1.1, Sparkle 2.10.1 is an exact Swift package dependency. At launch, `SPUStandardUpdaterController` starts
+with the standard update interface and a user driver delegate supporting gentle scheduled update reminders.
+`SUEnableAutomaticChecks` is true, so there is no update-check permission prompt or setting. The feed is
+`https://github.com/exgota/local-dictation/releases/latest/download/appcast.xml`. Checks do not enable silent
+installation; the standard alert offers installation when a newer build is available. `SUShowReleaseNotes` is
+false in `Packaging/Info.plist`, so the alert contains its message and buttons without a release-notes box.
+Update requests contain no dictated audio or text.
+
+Sparkle shows a scheduled alert itself only when it would be in immediate focus, such as just after launch.
+Otherwise the app adds Install update… above Open at login in the menu's second command group and posts one quiet
+notification if notification authorization already exists. The title is “Local Dictation update available” and the
+body is “Version <display version> is ready to install.” No notification permission is requested for an update.
+Selecting either reminder calls `checkForUpdates` to bring the standard alert into focus. Both reminders, including
+pending notification delivery, are removed when the update receives user attention or the update session finishes.
+The menu header and pill do not change.
+
+`SUPublicEDKey` in `Packaging/Info.plist` holds the release public key. Source builds without a valid key skip
+updater startup silently; a configured updater startup error is logged and leaves dictation available. The private key
+stays in the release Mac's login keychain, with an offline copy kept by the maintainer. `build_application.sh` embeds Sparkle, its XPC services and helper applications, signing
+inside out with the existing identity lookup and ad hoc fallback. `Tools/generate_appcast.py` prepares signed appcasts
+and changelog release notes in a local archive folder without publishing anything. Release notes remain in the
+appcast even though the alert does not display them. [BUILD.md](../BUILD.md) covers release preparation and the
+required desktop update test.
 
 ## Files and command line
 
@@ -295,9 +499,13 @@ or read the report through the socket.
 
 ## Testing
 
-- `swift test` runs 165 unit tests. They cover the hotkey state machine driven by synthetic key events, the clipboard
+- `swift test` runs the unit suite. They cover the hotkey state machine driven by synthetic key events, the clipboard
   transaction against a slow fake target, the injection chain with a spy, overlapping windows and their merge, the silent
   microphone check, the text steps, corrections, profiles, the cleanup client against a stubbed server, and history.
+  Moon tests cover stop timing independent of text completion, rapid restart, silent fade, persistent transcription, level and
+  warning smoothing, setup completion and permission changes, Reduce Motion, binary rendering, smoke expiry and hidden
+  canvas scheduling. Recording readiness tests cover start during loading, stop before readiness, readiness before stop,
+  load failure, timeout, cancellation, sample limits and buffered-to-live ordering.
 - `--selftest` runs WAV fixtures through the real pipeline and checks three things. The word error rate must be at most
   8 % for quiet fixtures and 15 % for noise and headset fixtures. Behavior fixtures must match the expected text word
   for word, ignoring case and punctuation. Latency, from the end of the audio to the final text, must be at most 1.5 s
@@ -316,7 +524,7 @@ or read the report through the socket.
   "fix".
 - Chrome and Electron apps build their accessibility tree only when an assistive client asks. The app asks when the
   trigger is pressed and, if it finds no focused element, again every 250 ms for 3 s. That covers later dictations. The
-  first dictation after Chrome itself launches can still end in the fallback panel, with the text on the clipboard.
+  first dictation after Chrome itself launches can still end with a parked moon, with the text on the clipboard.
 - Not yet tested: Bluetooth microphones, the 20-minute recording limit, recovery after sleep, and the resumable model
   download (testing it needs a 1.2 GB re-download).
 

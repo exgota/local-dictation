@@ -19,17 +19,9 @@ final class TranscriptProfileTests: XCTestCase {
                 capitalizeFirst: true, terminalPunctuation: true))
     }
 
-    func testCodeIsVerbatimAndNeverSubmits() {
+    func testCodeIsVerbatim() {
         XCTAssertEqual(TranscriptProfile.code.defaultOptions(), ProcessingOptions(vocabularyCorrections: true))
-        XCTAssertFalse(TranscriptProfile.code.submitsWithReturn(userPreference: true))
         XCTAssertEqual(TranscriptProfile.code.displayName, "Code/Terminal")
-    }
-
-    func testSubmitsWithReturnOnlyForChatWhenRequested() {
-        XCTAssertTrue(TranscriptProfile.chat.submitsWithReturn(userPreference: true))
-        XCTAssertFalse(TranscriptProfile.chat.submitsWithReturn(userPreference: false))
-        XCTAssertFalse(TranscriptProfile.verbatim.submitsWithReturn(userPreference: true))
-        XCTAssertFalse(TranscriptProfile.suppressed.submitsWithReturn(userPreference: true))
     }
 
     func testSuppressedProducesNoText() {

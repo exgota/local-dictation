@@ -2,7 +2,7 @@ import DictationCore
 import DictationEngine
 import Foundation
 
-/// Model readiness for the interface. Installation starts only on explicit request. The controller loads an installed
+/// Model readiness for the interface. Setup starts installation after both permissions are granted. The controller loads an installed
 /// model at launch, after an installation and after a change of compute target, and reuses the loaded model for every
 /// dictation.
 @MainActor final class ModelController: ObservableObject {
@@ -62,19 +62,6 @@ import Foundation
 
     func cancelInstallation() {
         installation?.cancel()
-    }
-
-    func remove() {
-        Task {
-            await transcriber?.unload()
-            transcriber = nil
-            do {
-                try store.remove()
-                state = .notInstalled
-            } catch {
-                state = .failed(error.localizedDescription)
-            }
-        }
     }
 
     func setComputeTarget(_ target: EncoderComputeTarget) {

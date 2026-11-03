@@ -87,6 +87,7 @@ public final class TappedKeyEventQueue: @unchecked Sendable {
 public final class EventTapSharedState: Sendable {
     private static let activeBit: UInt64 = 1 << 0
     private static let pausedBit: UInt64 = 1 << 1
+    private static let suspendedBit: UInt64 = 1 << 2
 
     private let status = Atomic<UInt64>(0)
     private let triggerChord = Atomic<UInt64>(0)
@@ -107,8 +108,8 @@ public final class EventTapSharedState: Sendable {
         pauseChord.store(configuration.pauseChord?.packed ?? 0, ordering: .releasing)
     }
 
-    public func publish(dictationActive: Bool, paused: Bool) {
-        status.store((dictationActive ? Self.activeBit : 0) | (paused ? Self.pausedBit : 0), ordering: .releasing)
+    public func publish(dictationActive: Bool, paused: Bool, suspended: Bool = false) {
+        status.store((dictationActive ? Self.activeBit : 0) | (paused ? Self.pausedBit : 0) | (suspended ? Self.suspendedBit : 0), ordering: .releasing)
     }
 
     // MARK: Tap thread
@@ -120,6 +121,7 @@ public final class EventTapSharedState: Sendable {
             if isSwallowed(event.keyCode) { return true }
             guard !event.isRepeat || matchesTrigger(event) else { return false }
             let current = status.load(ordering: .acquiring)
+            guard current & Self.suspendedBit == 0 else { return false }
             let paused = current & Self.pausedBit != 0
             let swallow =
                 (!paused && matchesTrigger(event))

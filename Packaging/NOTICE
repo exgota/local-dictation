@@ -16,3 +16,17 @@ Silero VAD, Copyright (c) 2020-present Silero Team, MIT License
   https://github.com/snakers4/silero-vad
   Core ML conversion: FluidInference/silero-vad-coreml, MIT License
     https://huggingface.co/FluidInference/silero-vad-coreml
+
+NASA CGI Moon Kit, public domain
+  NASA Goddard Space Flight Center, Scientific Visualization Studio
+  https://svs.gsfc.nasa.gov/4720/
+  Lunar Reconnaissance Orbiter Camera (LROC) albedo, lroc_color_poles_1k.jpg
+  Lunar Orbiter Laser Altimeter (LOLA) elevation, ldem_3_8bit.jpg
+
+The setup moon packs the 1024 by 512 albedo luminance in red and elevation in green.
+Rows are reversed for texture coordinates. Albedo luminance is rounded from
+0.2126 red + 0.7152 green + 0.0722 blue. The bundled mip levels preserve that packing.
+
+Sparkle 2.10.1, MIT License
+  https://github.com/sparkle-project/Sparkle
+  The bundled Sparkle-LICENSE includes its third-party notices.

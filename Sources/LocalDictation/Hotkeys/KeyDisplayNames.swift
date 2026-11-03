@@ -2,24 +2,12 @@ import Carbon.HIToolbox
 import DictationCore
 
 extension TriggerKey {
-    static let modifierChoices: [TriggerKey] = [.function, .rightOption, .rightCommand]
-
     var displayName: String {
         switch self {
         case .function: return "Fn"
         case .rightOption: return "Right Option"
         case .rightCommand: return "Right Command"
         case .key(let chord): return chord.displayName
-        }
-    }
-}
-
-extension TriggerMode {
-    var displayName: String {
-        switch self {
-        case .toggle: return "Toggle"
-        case .hold: return "Hold to talk"
-        case .doubleTapLock: return "Hold, double-tap to lock"
         }
     }
 }

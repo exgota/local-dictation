@@ -43,7 +43,6 @@ struct DictationConfiguration: Codable, Equatable {
     var computeTarget: EncoderComputeTarget = .neuralEngine
     var profiles = ProfileResolver()
     var vocabularyCorrectionsEnabled = false
-    var chatSubmitsWithReturn = false
     var keepsHistory = false
     var transcriptFolder = TranscriptFolderConfiguration()
 
@@ -86,7 +85,6 @@ struct DictationConfiguration: Codable, Equatable {
         computeTarget = value(.computeTarget, defaults.computeTarget)
         profiles = value(.profiles, defaults.profiles)
         vocabularyCorrectionsEnabled = value(.vocabularyCorrectionsEnabled, defaults.vocabularyCorrectionsEnabled)
-        chatSubmitsWithReturn = value(.chatSubmitsWithReturn, defaults.chatSubmitsWithReturn)
         keepsHistory = value(.keepsHistory, defaults.keepsHistory)
         transcriptFolder = value(.transcriptFolder, defaults.transcriptFolder)
         invalidKeys = invalid
@@ -106,7 +104,6 @@ struct DictationConfiguration: Codable, Equatable {
         try container.encode(computeTarget, forKey: .computeTarget)
         try container.encode(profiles, forKey: .profiles)
         try container.encode(vocabularyCorrectionsEnabled, forKey: .vocabularyCorrectionsEnabled)
-        try container.encode(chatSubmitsWithReturn, forKey: .chatSubmitsWithReturn)
         try container.encode(keepsHistory, forKey: .keepsHistory)
         try container.encode(transcriptFolder, forKey: .transcriptFolder)
     }
@@ -114,7 +111,7 @@ struct DictationConfiguration: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case trigger, triggerMode, repasteChord, pauseChord, maximumRecordingMinutes, inputDeviceIdentifier
         case stopsAfterSilence, silenceStopSeconds, cueVolume, computeTarget, profiles
-        case vocabularyCorrectionsEnabled, chatSubmitsWithReturn, keepsHistory, transcriptFolder
+        case vocabularyCorrectionsEnabled, keepsHistory, transcriptFolder
     }
 }
 

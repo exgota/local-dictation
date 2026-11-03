@@ -1,3 +1,4 @@
+import CoreGraphics
 import XCTest
 
 @testable import DictationCore
@@ -338,5 +339,80 @@ final class InjectionPlannerTests: XCTestCase {
         XCTAssertEqual(outcome, .landed)
         XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - start, 1, "a confirmed paste does not wait the full delay")
         XCTAssertEqual(pasteboard.contents, ["original", "original-rich"])
+    }
+}
+
+final class FocusedFieldIdentityTests: XCTestCase {
+    private var composer: FocusedFieldIdentity {
+        FocusedFieldIdentity(role: "AXTextArea", subrole: nil, identifier: nil, domIdentifier: "composer",
+                             placeholder: "Message", frame: CGRect(x: 10, y: 500, width: 400, height: 80), siblingIndex: 2)
+    }
+
+    private func matches(_ current: FocusedFieldIdentity, original: FocusedFieldIdentity? = nil,
+                         sameApplication: Bool = true, sameWindow: Bool = true,
+                         sameParent: Bool = true, uniqueSibling: Bool = true) -> Bool {
+        (original ?? composer).matchesReplacement(current, sameApplication: sameApplication,
+            sameWindow: sameWindow, sameParent: sameParent, uniqueSibling: uniqueSibling)
+    }
+
+    func testRecreatedComposerMatches() {
+        XCTAssertTrue(matches(composer))
+        var unnamedComposer = composer
+        unnamedComposer.domIdentifier = nil
+        XCTAssertTrue(matches(unnamedComposer, original: unnamedComposer), "A distinctive placeholder also supports contenteditable fields")
+    }
+
+    func testDifferentApplicationWindowOrParentRefused() {
+        XCTAssertFalse(matches(composer, sameApplication: false))
+        XCTAssertFalse(matches(composer, sameWindow: false))
+        XCTAssertFalse(matches(composer, sameParent: false))
+    }
+
+    func testSearchFieldInSameWindowRefused() {
+        var search = composer
+        search.domIdentifier = "search"
+        XCTAssertFalse(matches(search))
+        search = composer
+        search.subrole = "AXSearchField"
+        XCTAssertFalse(matches(search))
+        search = composer
+        search.placeholder = "Search"
+        XCTAssertFalse(matches(search))
+        search = composer
+        search.siblingIndex = 3
+        XCTAssertFalse(matches(search), "Even otherwise identical sibling fields are distinct")
+        XCTAssertFalse(matches(composer, uniqueSibling: false))
+    }
+
+    func testMissingOrChangedEvidenceRefused() {
+        var current = composer
+        current.frame = nil
+        XCTAssertFalse(matches(current))
+        current = composer
+        current.frame?.origin.y += 1
+        XCTAssertFalse(matches(current), "Geometry has no tolerance that could merge adjacent fields")
+        current = composer
+        current.domIdentifier = nil
+        XCTAssertFalse(matches(current))
+        current.placeholder = nil
+        XCTAssertFalse(matches(current, original: current), "Geometry alone never establishes identity")
+        current = composer
+        current.siblingIndex = nil
+        XCTAssertFalse(matches(current, original: current))
+        current = composer
+        current.role = nil
+        XCTAssertFalse(matches(current, original: current))
+        current = composer
+        current.frame = .zero
+        XCTAssertFalse(matches(current, original: current))
+    }
+
+    func testSecureRoleChangeRefused() {
+        var current = composer
+        current.subrole = "AXSecureTextField"
+        XCTAssertFalse(matches(current))
+        current = composer
+        current.role = "AXButton"
+        XCTAssertFalse(matches(current))
     }
 }

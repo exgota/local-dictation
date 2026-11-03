@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// What Accessibility reports about the focused element, reduced to what the injection choice depends on.
@@ -17,6 +18,43 @@ public struct FocusedElementDescription: Equatable, Sendable {
         self.isEditable = isEditable
         self.acceptsSelectedTextInsertion = acceptsSelectedTextInsertion
         self.isValueReadable = isValueReadable
+    }
+}
+
+/// A recording-time description, never reconstructed from the old element at delivery time.
+/// Text values and selections are deliberately excluded: they change while editing.
+public struct FocusedFieldIdentity: Equatable, Sendable {
+    public var role: String?
+    public var subrole: String?
+    public var identifier: String?
+    public var domIdentifier: String?
+    public var placeholder: String?
+    public var frame: CGRect?
+    public var siblingIndex: Int?
+
+    public init(role: String?, subrole: String?, identifier: String?, domIdentifier: String?,
+                placeholder: String?, frame: CGRect?, siblingIndex: Int?) {
+        self.role = role
+        self.subrole = subrole
+        self.identifier = identifier
+        self.domIdentifier = domIdentifier
+        self.placeholder = placeholder
+        self.frame = frame
+        self.siblingIndex = siblingIndex
+    }
+
+    /// Replacement objects need independent evidence of field identity. Geometry alone is insufficient.
+    /// Missing attributes, changed containers and ambiguous siblings fail closed.
+    public func matchesReplacement(_ current: Self, sameApplication: Bool, sameWindow: Bool,
+                                   sameParent: Bool, uniqueSibling: Bool) -> Bool {
+        guard sameApplication, sameWindow, sameParent, uniqueSibling,
+            let role, !role.isEmpty, let frame, !frame.isEmpty, !frame.isNull,
+            frame.origin.x.isFinite, frame.origin.y.isFinite,
+            frame.width.isFinite, frame.height.isFinite,
+            siblingIndex != nil,
+            [identifier, domIdentifier, placeholder].contains(where: { $0?.isEmpty == false })
+        else { return false }
+        return self == current
     }
 }
 

@@ -9,16 +9,37 @@ import DictationCore
     let applicationName: String
     let bundleIdentifier: String?
     let focusedElement: AXUIElement?
+    let wasSecure: Bool
+    let setupTextTarget: SetupTextInsertionTarget?
+    private let fieldIdentity: FocusedFieldIdentity?
+    private let window: AXUIElement?
+    private let parent: AXUIElement?
+    private let hadUniqueIdentity: Bool
+
+    private init(processIdentifier: pid_t, applicationName: String, bundleIdentifier: String?,
+                 focusedElement: AXUIElement?, wasSecure: Bool = false, setupTextTarget: SetupTextInsertionTarget? = nil) {
+        self.processIdentifier = processIdentifier
+        self.applicationName = applicationName
+        self.bundleIdentifier = bundleIdentifier
+        self.focusedElement = focusedElement
+        self.setupTextTarget = setupTextTarget
+        self.wasSecure = wasSecure || focusedElement.map { Accessibility.string($0, kAXSubroleAttribute) == kAXSecureTextFieldSubrole } == true
+            || SecureInputMonitor.currentHolder()?.processIdentifier == processIdentifier
+        self.window = focusedElement.flatMap { Accessibility.element($0, kAXWindowAttribute) }
+        self.parent = focusedElement.flatMap { Accessibility.element($0, kAXParentAttribute) }
+        self.fieldIdentity = focusedElement.map { Accessibility.fieldIdentity($0) }
+        self.hadUniqueIdentity = focusedElement.map { Accessibility.hasUniqueIdentity($0) } ?? false
+    }
 
     /// The same target with the element now focused in its application, for a target whose first query found none. Nil
     /// when the target already has an element, when another application is frontmost, or when the query finds none.
     func withFocusedElement() -> InsertionTarget? {
-        guard focusedElement == nil, NSWorkspace.shared.frontmostApplication?.processIdentifier == processIdentifier,
+        guard setupTextTarget == nil, focusedElement == nil, NSWorkspace.shared.frontmostApplication?.processIdentifier == processIdentifier,
             let element = Accessibility.focusedElement(of: processIdentifier)
         else { return nil }
         return InsertionTarget(
             processIdentifier: processIdentifier, applicationName: applicationName, bundleIdentifier: bundleIdentifier,
-            focusedElement: element)
+            focusedElement: element, wasSecure: wasSecure)
     }
 
     /// Identifies the application across dictations: its bundle identifier, or its name when it has none.
@@ -26,21 +47,41 @@ import DictationCore
 
     static func current() -> InsertionTarget? {
         guard let application = NSWorkspace.shared.frontmostApplication else { return nil }
+        let setupTextTarget = application.processIdentifier == getpid() ? SetupTextInsertionTarget.current() : nil
         return InsertionTarget(
             processIdentifier: application.processIdentifier,
             applicationName: application.localizedName ?? "the application",
             bundleIdentifier: application.bundleIdentifier,
-            focusedElement: Accessibility.focusedElement(of: application.processIdentifier))
+            focusedElement: setupTextTarget == nil ? Accessibility.focusedElement(of: application.processIdentifier) : nil,
+            setupTextTarget: setupTextTarget)
     }
 
-    /// True when the same application is frontmost and the same element still has focus. Without element identity the
-    /// target cannot be verified, so automatic insertion is refused.
-    func isStillFocused() -> Bool {
+    /// Returns the current object only after it has been matched to the immutable recording-time target.
+    /// An unchanged object retains the original behavior. Replacement objects require a stable window and parent.
+    func resolvedFocusedElement() -> AXUIElement? {
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == processIdentifier,
             let focusedElement, let now = Accessibility.focusedElement(of: processIdentifier)
-        else { return false }
-        return CFEqual(focusedElement, now)
+        else { return nil }
+        let currentWindow = Accessibility.element(now, kAXWindowAttribute)
+        if let window, let currentWindow, !CFEqual(window, currentWindow) { return nil }
+        if CFEqual(focusedElement, now) { return now }
+        guard hadUniqueIdentity, let fieldIdentity, let window, let currentWindow, let parent,
+            let currentParent = Accessibility.element(now, kAXParentAttribute),
+            CFEqual(window, currentWindow), CFEqual(parent, currentParent),
+            Accessibility.children(currentParent) != nil
+        else { return nil }
+        let current = Accessibility.fieldIdentity(now)
+        guard fieldIdentity.matchesReplacement(current, sameApplication: true, sameWindow: true,
+                                               sameParent: true, uniqueSibling: Accessibility.hasUniqueIdentity(now))
+        else { return nil }
+        // Attribute reads cross process boundaries. Recheck after the sibling scan before accepting its result.
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == processIdentifier,
+            let latest = Accessibility.focusedElement(of: processIdentifier), CFEqual(now, latest)
+        else { return nil }
+        return now
     }
+
+    func isStillFocused() -> Bool { setupTextTarget?.isStillFocused ?? (resolvedFocusedElement() != nil) }
 }
 
 enum Accessibility {
@@ -54,6 +95,43 @@ enum Accessibility {
         AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
         AXUIElementSetAttributeValue(application, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
         return element(application, kAXFocusedUIElementAttribute)
+    }
+
+    static func children(_ element: AXUIElement) -> [AXUIElement]? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success,
+            let children = value as? [AXUIElement], children.count <= 256
+        else { return nil }
+        return children
+    }
+
+    static func hasUniqueIdentity(_ element: AXUIElement) -> Bool {
+        guard let parent = self.element(element, kAXParentAttribute), let siblings = children(parent) else { return false }
+        let identity = fieldIdentity(element, includeSiblingIndex: false)
+        // Ignore position in the list when rejecting overlapping lookalike siblings.
+        return siblings.filter { fieldIdentity($0, includeSiblingIndex: false) == identity }.count == 1
+    }
+
+    static func fieldIdentity(_ element: AXUIElement, includeSiblingIndex: Bool = true) -> FocusedFieldIdentity {
+        var positionValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        var frame: CGRect?
+        if AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionValue) == .success,
+            AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValue) == .success,
+            let positionValue, let sizeValue,
+            CFGetTypeID(positionValue) == AXValueGetTypeID(), CFGetTypeID(sizeValue) == AXValueGetTypeID(),
+            AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
+            AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) {
+            frame = CGRect(origin: position, size: size)
+        }
+        let parent = includeSiblingIndex ? self.element(element, kAXParentAttribute) : nil
+        let siblingIndex = parent.flatMap { children($0) }?.firstIndex { CFEqual($0, element) }
+        return FocusedFieldIdentity(
+            role: string(element, kAXRoleAttribute), subrole: string(element, kAXSubroleAttribute),
+            identifier: string(element, kAXIdentifierAttribute), domIdentifier: string(element, "AXDOMIdentifier"),
+            placeholder: string(element, kAXPlaceholderValueAttribute), frame: frame, siblingIndex: siblingIndex)
     }
 
     static func describe(_ element: AXUIElement, processIdentifier: pid_t) -> FocusedElementDescription {
@@ -106,7 +184,7 @@ enum Accessibility {
 /// Delivers text into one target through the chain chosen by `InjectionPlanner`.
 @MainActor final class TextInserter: TextInjecting {
     private let target: InsertionTarget
-    private let element: AXUIElement
+    private var element: AXUIElement
     private let onLanded: @MainActor () -> Void
 
     private init(target: InsertionTarget, element: AXUIElement, onLanded: @escaping @MainActor () -> Void) {
@@ -120,7 +198,13 @@ enum Accessibility {
     static func insert(
         _ text: String, into target: InsertionTarget, onLanded: @escaping @MainActor () -> Void = {}
     ) async -> InjectionOutcome {
-        guard target.isStillFocused(), let element = target.focusedElement else {
+        if let setupTextTarget = target.setupTextTarget {
+            guard !target.wasSecure else { return .refusedSecureField }
+            let outcome = setupTextTarget.insert(text)
+            if case .inserted = outcome { onLanded() }
+            return outcome
+        }
+        guard let element = target.resolvedFocusedElement() else {
             return target.focusedElement == nil ? .noEditableFocus : .targetChanged
         }
         let description = Accessibility.describe(element, processIdentifier: target.processIdentifier)
@@ -134,7 +218,13 @@ enum Accessibility {
     /// Applications whose fields accepted an Accessibility insertion and read back unchanged during this session.
     private static var applicationsIgnoringAccessibilityInsertion: Set<String> = []
 
-    func isTargetStillFocused() -> Bool { target.isStillFocused() }
+    func isTargetStillFocused() -> Bool {
+        guard let current = target.resolvedFocusedElement() else { return false }
+        let description = Accessibility.describe(current, processIdentifier: target.processIdentifier)
+        guard !description.isSecure, description.isEditable || description.acceptsSelectedTextInsertion else { return false }
+        element = current
+        return true
+    }
 
     /// A readable snapshot of the field: its value, length and insertion point. Nil parts mean Accessibility does not
     /// expose them.
@@ -185,6 +275,11 @@ enum Accessibility {
             if showsArrival(of: text, since: before) { return .delivered }
             if monotonicSeconds() >= deadline { break }
             try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        // A replaced object can retain an unchanged value even when the replacement received the text.
+        // Only the exact object used by this attempt can prove non-delivery; otherwise never retry with paste.
+        guard let current = target.resolvedFocusedElement(), CFEqual(element, current) else {
+            return .uncertain(clipboard: .writeIfUnchanged(changeCount: clipboardChangeCount))
         }
         return before.isReadable && fieldState() == before
             ? .notDelivered : .uncertain(clipboard: .writeIfUnchanged(changeCount: clipboardChangeCount))

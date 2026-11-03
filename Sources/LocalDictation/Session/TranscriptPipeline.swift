@@ -4,11 +4,11 @@ import TranscriptHistory
 
 /// What happens to a raw transcript before insertion: the target application's profile and the opt-in deterministic
 /// steps. Also writes the opt-in history and transcript files.
-@MainActor final class TranscriptPipeline {
+@MainActor final class TranscriptPipeline: ObservableObject {
+    @Published private(set) var historyRevision = 0
     struct Prepared {
         let profile: TranscriptProfile
         let finalText: String
-        let submitsWithReturn: Bool
     }
 
     private let settings: DictationSettings
@@ -53,13 +53,11 @@ import TranscriptHistory
     func prepare(_ rawText: String, bundleIdentifier: String?) -> Prepared {
         let configuration = settings.configuration
         let profile = configuration.profiles.profile(forBundleIdentifier: bundleIdentifier)
-        guard profile.producesText else { return Prepared(profile: profile, finalText: "", submitsWithReturn: false) }
+        guard profile.producesText else { return Prepared(profile: profile, finalText: "") }
         let text = processor.process(
             rawText, options: profile.defaultOptions(vocabularyCorrectionsEnabled: configuration.vocabularyCorrectionsEnabled),
             corrections: configuration.vocabularyCorrectionsEnabled ? vocabulary : VocabularyCorrections())
-        return Prepared(
-            profile: profile, finalText: text,
-            submitsWithReturn: profile.submitsWithReturn(userPreference: configuration.chatSubmitsWithReturn))
+        return Prepared(profile: profile, finalText: text)
     }
 
     /// Appends to the history and the transcript folder when they are turned on. Failures are logged and never block
@@ -84,6 +82,7 @@ import TranscriptHistory
             try await store.append(TranscriptHistoryEntry(
                 timestamp: Date(), durationSeconds: durationSeconds, rawText: rawText, finalText: finalText,
                 applicationBundleIdentifier: bundleIdentifier, applicationName: applicationName))
+            historyRevision += 1
         } catch {
             dictationLog.error("history append failed: \(error.localizedDescription)")
         }
