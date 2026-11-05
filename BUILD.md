@@ -254,8 +254,23 @@ This example assumes 1.1.1/build 3. Stage only archives from 1.1 onward, with un
 HTML notes from each version's changelog and signs the appcast using Sparkle's keychain key. The notes remain in
 the appcast, but `SUShowReleaseNotes` is false in `Packaging/Info.plist`, so the standard update alert shows its
 message and buttons without a release-notes box. The script preserves old entries, creates no deltas, and uploads
-nothing. Before separately publishing, review the appcast and signatures. Every archive URL must remain downloadable. The latest GitHub release must contain `appcast.xml`; also provide `Local-Dictation.zip`
-for the README's installation path.
+nothing. Before separately publishing, review the appcast and signatures. Every archive URL must remain downloadable.
+`generate_appcast` rewrites the enclosure URLs of older items to the new prefix, so point each older item back at its
+own release before publishing. The latest GitHub release must contain `appcast.xml`, `Local-Dictation.zip` and
+`Local-Dictation.dmg`; the README links to the disk image.
+
+The disk image holds the same signed app beside an Applications shortcut, on the background in `Packaging/`, which
+`Tools/render_disk_image_background.py` renders from the app's moon texture:
+
+```sh
+Tools/build_disk_image.sh "dist/Local Dictation.app" release-archives/Local-Dictation.dmg
+```
+
+The first run installs a pinned `dmgbuild` into `.build/disk-image-tools`. The disk image itself stays unsigned: the
+app's identity has no Apple team, and Gatekeeper assesses a signed but unnotarized disk image before it mounts. Finder
+draws the icon labels black on any custom background in both appearances, so the area behind both labels stays light.
+Before shipping, open the downloaded disk image in a clean macOS 27 machine in Light and Dark appearance, drag the app
+to Applications, and also open it straight from the disk image to check the Move offer.
 
 Before shipping, complete a real desktop update test:
 

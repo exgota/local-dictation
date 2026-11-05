@@ -12,13 +12,15 @@ and your words are typed where the cursor is. Speech is recognized on your Mac, 
 You need a Mac with Apple silicon, macOS 27 or later, and about 2.5 GB of free space while the speech model installs. It
 takes about 1.3 GB after that.
 
-1. Download `Local-Dictation.zip` from [Releases](https://github.com/exgota/local-dictation/releases), unzip it, and
-   open Local Dictation.
-2. The app is not notarized by Apple, so the first time macOS says it cannot verify the app. Click Done.
+1. Download [`Local-Dictation.dmg`](https://github.com/exgota/local-dictation/releases/latest/download/Local-Dictation.dmg),
+   open it, and drag Local Dictation onto the Applications folder in the window.
+2. Open Local Dictation from Applications. The app is not notarized by Apple, so the first time macOS says it cannot
+   verify the app. Click Done.
 3. Open System Settings → Privacy & Security, scroll to Security, and click Open Anyway next to Local Dictation. Confirm
    with your password.
-4. Choose Move to Applications when the app offers. It moves itself and reopens. Choose Not Now to use it where it is;
-   it will offer again on the next launch.
+
+If you open the app from the disk image or from Downloads instead, it offers to move itself to Applications. Choose
+Move to Applications, and it moves and reopens. `Local-Dictation.zip` on the same release holds the same app.
 
 Setup then walks through four steps, one at a time:
 
