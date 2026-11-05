@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.1.1 (November 5, 2026)
+
+- Text copied after you stop dictating stays on the clipboard, even if focus moves or no text field is selected. Use
+  Paste last text to recover the dictation.
+- The small parked moon turns into the original document copy icon when the dictation is on the clipboard.
+- Paste last text works while another dictation is recording or transcribing. Short or empty recordings keep the
+  previous usable text available.
+- Text delivery has a time limit. A stalled insertion leaves the text available for recovery and lets later
+  dictations continue in order.
+- Setup's practice field accepts dictation and shows Done after text arrives. An open setup window cannot take text
+  intended for another app.
+- Model downloads show arriving progress, report a lost connection within about 15 seconds and offer Try Again. The moon stays just
+  below complete until the model is ready.
+- Setup and the recording indicator fade in smoothly. Reduce Motion keeps these transitions still.
+- The menu uses standard shortcut labels and removes the extra moon and status heading. The secure-input lock keeps
+  the menu available and names the app blocking shortcuts when macOS identifies it.
+- Opening a copy outside Applications offers to move it. An existing installation is replaced in its current folder,
+  including a renamed copy. The downloaded copy stays in Downloads, so macOS does not ask for access to that folder.
+- Setup, Settings, History and the Move alert come to the front by themselves, including after System Settings, and
+  show Local Dictation in the Dock and in Command-Tab while they are open.
+- The app icon uses Apple's Icon Composer format, so System Settings and Finder no longer show it inside a gray box.
+- Setup opens centered, stays dark in Light appearance so its moon stays visible, and the Move alert can be read by
+  VoiceOver.
+- After you allow the microphone in System Settings following a denial, macOS's Quit & Reopen brings setup back on the
+  next step.
+- Moving the app or reopening a quarantined installation waits for the old process to quit, so the replacement can
+  stay running.
+
 ## 1.1 (November 3, 2026)
 
 - The indicator is a dithered moon that swells as you talk. Setup, the menu and the app icon use the same moon.

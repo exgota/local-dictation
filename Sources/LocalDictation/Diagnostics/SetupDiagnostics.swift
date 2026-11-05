@@ -15,14 +15,20 @@ import SwiftUI
             ("microphone_denied", .init(microphoneDenied: true), ""),
             ("accessibility", .init(microphoneGranted: true), ""),
             ("accessibility_waiting", .init(microphoneGranted: true, waitingForAccessibility: true), ""),
-        ] + [0, 25, 50, 75, 99].map { percent in
+        ] + [0, 25, 50, 75, 99, 100].map { percent in
             ("download_\(percent)", SetupPresentation(microphoneGranted: true, accessibilityGranted: true,
                 model: .installing(.downloading, fraction: Double(percent) / 100)), "")
         } + [
+            ("download_compiling", .init(microphoneGranted: true, accessibilityGranted: true, model: .installing(.compiling, fraction: 1)), ""),
+            ("download_loading", .init(microphoneGranted: true, accessibilityGranted: true, model: .loading), ""),
             ("download_failed", .init(microphoneGranted: true, accessibilityGranted: true, model: .failed("Fixture"), retainedDownloadProgress: 0.37), ""),
             ("try_it_empty", .init(microphoneGranted: true, accessibilityGranted: true, model: .ready), ""),
             ("try_it_listening", .init(microphoneGranted: true, accessibilityGranted: true, model: .ready, listening: true), ""),
-            ("try_it_text", .init(microphoneGranted: true, accessibilityGranted: true, model: .ready), "Hello from Local Dictation."),
+            ("try_it_text", .init(microphoneGranted: true, accessibilityGranted: true, model: .ready, hasText: true), "Hello from Local Dictation."),
+            ("try_it_hold_empty", .init(microphoneGranted: true, accessibilityGranted: true, model: .ready, triggerMode: .hold), ""),
+            ("try_it_hold_listening", .init(microphoneGranted: true, accessibilityGranted: true, model: .ready, triggerMode: .hold, listening: true), ""),
+            ("try_it_hold_text", .init(microphoneGranted: true, accessibilityGranted: true, model: .ready, triggerMode: .hold, hasText: true), "Hello from Local Dictation."),
+            ("try_it_custom_trigger", .init(microphoneGranted: true, accessibilityGranted: true, model: .ready, trigger: .rightOption), ""),
         ]
         for (name, presentation, text) in states {
             try capture(SetupContentView(presentation: presentation, text: .constant(text)), name: name, directory: directory)
@@ -37,7 +43,28 @@ import SwiftUI
         print("Rendered \(states.count) setup states without starting application services.")
     }
 
-    private static func capture<Content: View>(_ content: Content, name: String, directory: URL) throws {
+    static func renderDownload(directory: URL) throws {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.prohibited)
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for index in 0..<120 {
+            let fraction = Double(index) / 119
+            let presentation = SetupPresentation(microphoneGranted: true, accessibilityGranted: true,
+                                                 model: .installing(.downloading, fraction: fraction))
+            try capture(SetupContentView(presentation: presentation, text: .constant("")),
+                        name: String(format: "frame_%03d", index), directory: directory, time: Float(index) / 30)
+        }
+        try """
+        The production download step, dark at 2x, 120 frames at 30 fps over four seconds.
+        Deterministic byte fractions from 0 through 100%; actual SetupPresentation formats the percentage.
+        The moon uses the same fractions and production drawing, with shader time index / 30.
+        Its last surface fraction remains capped at 99% until compilation and loading finish, as in the app.
+        This samples the download presentation, not a live network transfer.
+        """.write(to: directory.appendingPathComponent("render.txt"), atomically: true, encoding: .utf8)
+    }
+
+    private static func capture<Content: View>(_ content: Content, name: String, directory: URL, time: Float = 1.7) throws {
         let hosting = NSHostingController(rootView: content.transaction { $0.disablesAnimations = true })
         hosting.sizingOptions = [.preferredContentSize]
         let window = NSWindow(contentViewController: hosting)
@@ -56,7 +83,7 @@ import SwiftUI
             throw MoonRenderingError.unavailable
         }
         // Pin the production drawing rather than substituting a separate moon implementation.
-        frame.time = 1.7
+        frame.time = time
         frame.previousShape = frame.nextShape
         frame.transition = 1
         if frame.download > 1 { frame.download = 1.25 }

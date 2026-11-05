@@ -35,8 +35,9 @@ swift build
 ```
 
 For an optimized diagnostics build, use `swift build -c release -Xswiftc -DMOON_DIAGNOSTICS` and the release binary.
-The command is excluded from ordinary release builds. The directory receives 13 PNGs: microphone, microphone denied,
-Accessibility, Accessibility waiting, download at 0/25/50/75/99 percent, download failed, and try-it empty/listening/text.
+The command is excluded from ordinary release builds. The directory receives 20 PNGs: microphone, microphone denied,
+Accessibility, Accessibility waiting, download at 0/25/50/75/99/100 percent, compiling, loading, download failed,
+try-it empty/listening/text for toggle and hold modes, and a custom-trigger example.
 All use dark appearance at 2 pixels per point. The actual setup shader drawing is pinned to 1.7 seconds and a settled
 shape transition, with completion phase 1.25 (400 ms into the ring) and failed-download progress at 37%. Each view is
 created directly in its final state, so no cross-fade is sampled. The text capture contains a synthetic fixture. These offscreen captures establish layout and drawing, not
@@ -46,6 +47,87 @@ The reference `SetupPrototype` target accepts the same command and writes the sa
 unchanged, including its fixed action area, which clips Done in the try-it captures. Production allows this area to
 grow so the real text field and Done both fit. Compare the moon and copy at their original coordinates; production's
 try-it window is taller for this reason.
+
+The same debug and diagnostics builds also accept:
+
+```sh
+.build/debug/LocalDictation --render-download "/tmp/Local Dictation/download"
+.build/debug/LocalDictation --render-move-alert "/tmp/Local Dictation/move-to-applications"
+.build/debug/LocalDictation --render-menu "/tmp/Local Dictation/menu"
+```
+
+The download command writes 120 frames at 30 fps over four seconds. Byte fractions progress from 0 to 100% through
+`SetupPresentation` and the production SwiftUI and Metal views. The move alert command captures the actual `NSAlert`
+frame view without running it modally or moving anything. If a headless SSH session omits the native alert
+compositor layers, run that same debug executable in a logged-in desktop session for the capture. Menu captures use
+the real menu model with AppKit text and separators, as in the interface diagnostics; native tracking and compositor
+vibrancy still need a desktop check.
+
+## Motion renders
+
+Debug and `MOON_DIAGNOSTICS` builds also accept:
+
+```sh
+.build/debug/LocalDictation --render-setup-shadow "/tmp/Local Dictation/shadow"
+.build/debug/LocalDictation --render-pill-entrance "/tmp/Local Dictation/entrance"
+```
+
+The shadow command writes `microphone`, `function_key` and `downloading_moon` folders. Each has 90 dark PNG frames
+at 480 × 480 pixels, the 240 pt tile at 2×, sampled at 30 fps over three seconds. The moon holds at 52%.
+The production shadow is centered and soft. A three-second float lifts the shape through 3% of its height while
+shrinking and fading the shadow. Reduce Motion removes the float and holds the full-size shadow.
+
+The entrance command writes 72 dark PNG frames at 192 × 192 pixels, the 96 pt coin container at 2×, sampled at
+60 fps over 1.2 seconds. It uses the production level smoothing, coin layer tree and Metal renderer. The coin fades
+for 150 ms while formation rises from 0.72 to 1. The scattered dots pull inward without rotating. The shared synthetic
+voice curve is saved in `voice-levels.json`.
+
+Both commands start before relocation, permission, model and recording services. Their `render.txt` files record
+sampling details. The frames establish appearance and synthetic timing, not live microphone response or desktop
+window behavior.
+
+## Park renders
+
+The `--render-park-parity STATES.json DIRECTORY` path renders the shipped Park, including its satellite copy cue.
+`--render-park-sequence STATES.json DIRECTORY` uses the same samples, composited through the production coin layers
+on a dark 192 × 192 pixel canvas (96 pt at 2×). An optional `stopAge` samples the stopped moon's smoke before Park
+arrives. Otherwise `age`, `departure`, `departureAge` and `reduceMotion` retain their normal Park meanings.
+The optional `copyPlacement` is `satellite` (the shipped default) or `mainCoin` (the original pitch placement for
+comparison). Both use the original document artwork; the main-coin comparison keeps the small moon and fades the
+big moon under the icon.
+
+The optional `smallElement` selects a diagnostics-only comparison with no settled moons: `checkmark` (Q1),
+`textCursor` (Q2), or `command` (Q3). It takes precedence over `copyPlacement` for copied-text reasons. The upper smoke
+forms the chosen symbol at the satellite position; after the 500 ms arrival, the main moon's particles re-form into
+the original main-coin artwork over 300 ms. The cursor fades out and back twice, 700 ms per cycle, then stays
+visible. Both blinks finish before the existing focus-moved timeout. Reduce Motion uses fixed-position opacity fades. No-copy reasons, including secure fields, keep the shipped
+rendering. The HUD leaves `smallElement` unset, so the shipped default, announcements, and dismissal paths are unchanged.
+
+These diagnostics start no recording or clipboard services. Output also includes raw-bitmap
+`checksums.json`, `opacities.json`, and the isolated artwork at 56 and 112 pixels.
+
+Each state supplies `name`, `pixels` (112 for 2×), `sourceTime`, `sourceLevel`, `smokeFraction`, `age` and `reason`.
+For example, a held focus-moved sample after arrival is:
+
+```json
+[{"name":"frame_060","pixels":112,"sourceTime":1.25,"sourceLevel":0.65,
+  "smokeFraction":0.5185185185,"age":0.7666666667,"reason":"focusMoved"}]
+```
+
+The review sequence is sampled at 60 fps from stop, uses a synthetic miss at 14/60 s, allows 0.5 s for arrival,
+and then holds for 2.5 s, as when hover pauses the timeout. This does not extend the production timeout. Separate
+paste, timeout, secure-field and Reduce Motion captures exercise leave and accessibility behavior. The copy cue
+is shared by the live HUD and diagnostics in every build configuration.
+
+`MoonParkFrameParityTests` checks 664 frozen frames in `Tests/MoonRenderingTests/Fixtures/ParkFrameBaseline.json`.
+The baseline uses the original pitch artwork at the satellite position. Against the preceding squares baseline,
+555 frames are unchanged and 109 copy-cue frames change; all opacities, pre-cue frames and no-copy reasons are unchanged.
+Each entry records the rendering inputs, SHA-256 of the raw RGBA bytes, and presentation opacity. It includes
+1×/2× arrival and cue formation at 60 fps, hold, paste and timeout exits before and during cue formation,
+secure fields, reasons without established copied text, and Reduce Motion. Tests render the production path
+with the default satellite placement and compare it with those saved outputs. `OriginalCopyArtworkReference.json`
+holds independent masks from the supplied Canvas drawing at 56 and 112 pixels. CoreGraphics rasterization differs
+at a few antialiased edges before Bayer thresholding; the reference comparison permits at most 0.3% differing pixels.
 
 ## Cue sounds
 
@@ -60,11 +142,14 @@ The measurements behind them are in `docs/audio/README.md`.
 
 ## Application icon
 
-`Packaging/AppIcon.icns` is generated too. Change it through the generator:
+`Packaging/AppIcon.icon` is an Icon Composer icon. Its fill, shadow and layer settings are in `icon.json`; open the
+folder in Icon Composer (inside Xcode) to change them. The moon layer, `Assets/moon.png`, is generated:
 
 ```sh
 swift Tools/GenerateApplicationIcon.swift
 ```
+
+`build_application.sh` compiles the icon with `actool` into `Assets.car` and `AppIcon.icns`.
 
 ## Signing identity
 
@@ -86,15 +171,16 @@ the permissions again after every build. To recreate the identity on another Mac
 3. Trust the certificate for code signing.
 
 At each launch the app records the SHA-1 digest of its signing certificate. If the digest differs from the one recorded
-at the previous launch, setup shows a secondary line and `--doctor` warns, because the grants for the old identity
-no longer apply.
+at the previous launch, `--doctor` warns, because the grants for the old identity no longer apply.
 
 ## Install location
 
-`~/Applications` is a supported location. The app warns about its location only when it runs quarantined (its bundle
-carries the `com.apple.quarantine` attribute) or translocated (macOS runs it from a randomized path under
-`AppTranslocation`). These cases arise when the app is opened from a disk image or from Downloads, and in both macOS
-withholds permissions.
+Before setup, an app launched outside `/Applications` or `~/Applications` offers one native move alert. It prefers
+`/Applications`, falling back to `~/Applications` when the system directory is not writable, and replaces an existing
+copy. Not Now continues this launch and offers again next time. A translocated app resolves its original path through
+Security.framework. If the original is already installed, it clears that bundle's quarantine and reopens silently.
+Moves stage a complete copy before replacing the destination. Failures continue the current launch silently.
+Diagnostics and command-line requests skip relocation. `--doctor` keeps its installation and signing checks.
 
 ## Tests
 
@@ -146,8 +232,7 @@ Scheduled checks use Sparkle's gentle reminder delegate. Near launch, Sparkle ca
 immediate focus. Otherwise Install update… appears at the top of the menu's second command group, above Open at login.
 One notification is posted only with existing notification authorization; an update never prompts for that permission.
 The menu command and notification click both call `checkForUpdates` to focus the standard alert. User attention or
-session completion clears the menu item and any pending or delivered notification. The menu header and pill stay
-unchanged.
+session completion clears the menu item and any pending or delivered notification. The pill stays unchanged.
 
 Updates are signed with an EdDSA key. Its public half is `SUPublicEDKey` in `Packaging/Info.plist`. The private half
 lives in the release Mac's login keychain, where `generate_appcast` reads it. To sign releases on another Mac, import

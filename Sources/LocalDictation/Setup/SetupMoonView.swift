@@ -18,6 +18,7 @@ struct SetupMoonView: NSViewRepresentable {
             let state = animation.frame(at: time)
             var frame = MoonFrame()
             frame.mode = 2
+            frame.reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             frame.time = Float(MoonAnimation.shaderTime(elapsed: time - origin,
                 reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion))
             frame.previousShape = Float(state.previous)

@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import CryptoKit
 import Darwin
 import DictationCore
 import Foundation
@@ -102,6 +103,7 @@ import Metal
             frame.level = parameters["level"] ?? 0
             frame.shake = parameters["shake"] ?? 0
             frame.warning = parameters["warn"] ?? 0
+            frame.park = parameters["park"] ?? 0
             frame.formation = parameters["form"] ?? 1
             frame.transition = parameters["mix"] ?? 0
             frame.ditherRate = parameters["rate"] ?? 0
@@ -110,6 +112,7 @@ import Metal
             frame.mode = parameters["mode"] ?? 1
             frame.previousShape = parameters["a"] ?? 0
             frame.nextShape = parameters["b"] ?? frame.previousShape
+            frame.reduceMotion = (parameters["reduceMotion"] ?? 0) > 0
             return frame
         }
     }
@@ -130,6 +133,7 @@ import Metal
         print("Resources: \(try MoonRenderer.resource("Moon", extension: "metal").path)")
     }
 
+    #if DEBUG || MOON_DIAGNOSTICS
     private struct ParkCapture: Decodable {
         let name: String
         let pixels: Int
@@ -138,52 +142,61 @@ import Metal
         let smokeFraction: Double
         let age: Double
         let reason: DictationMiss
-        let departure: String?
         let departureAge: Double?
         let reduceMotion: Bool?
+        let stopAge: Double?
     }
 
-    public static func renderPark(states: URL, directory: URL) throws {
+    public static func renderPark(states: URL, directory: URL,
+                                  composite: ((MoonBitmap, Double) throws -> MoonBitmap)? = nil) throws {
         let captures = try JSONDecoder().decode([ParkCapture].self, from: Data(contentsOf: states))
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let renderer = try MoonRenderer.shared.get()
         var opacities: [String: Double] = [:]
+        var checksums: [String: String] = [:]
         for capture in captures {
             var sourceFrame = MoonFrame()
             sourceFrame.time = capture.sourceTime
             sourceFrame.level = capture.sourceLevel
             let source = try renderer.render(sourceFrame, pixels: capture.pixels)
-            var targetFrame = MoonFrame()
-            targetFrame.time = 1.7
-            let main = try renderer.render(targetFrame, pixels: capture.pixels)
-            let satellite = try renderer.render(targetFrame, pixels: MoonPark.satellitePixels(for: capture.pixels))
-            let motion = MoonPark(source: source, main: main, satellite: satellite, smokeFraction: capture.smokeFraction)
-            let result = motion.render(age: capture.age, reason: capture.reason,
-                departure: capture.departure.map { $0 == "pasted" ? .pasted : .timeout }, departureAge: capture.departureAge,
+            let stopped = capture.smokeFraction > 0 ? MoonSmoke(bitmap: source).render(fraction: capture.smokeFraction) : source
+            let motion = try MoonPark(source: stopped, shader: sourceFrame,
+                                  opacity: MoonAnimation.smokeOpacity(after: capture.smokeFraction * MoonAnimation.smokeDuration))
+            let result = try motion.render(age: capture.age, reason: capture.reason,
+                departureAge: capture.departureAge,
                 reduceMotion: capture.reduceMotion ?? false)
-            try result.bitmap.write(to: directory.appendingPathComponent(capture.name + ".png"))
-            opacities[capture.name] = result.opacity
+            let bitmap: MoonBitmap
+            let opacity: Double
+            if let stopAge = capture.stopAge {
+                bitmap = MoonSmoke(bitmap: source).render(fraction: stopAge / MoonAnimation.smokeDuration)
+                opacity = MoonAnimation.smokeOpacity(after: stopAge)
+            } else {
+                bitmap = result.bitmap
+                opacity = result.opacity
+            }
+            let captured = try composite?(bitmap, opacity) ?? bitmap
+            try captured.write(to: directory.appendingPathComponent(capture.name + ".png"))
+            opacities[capture.name] = opacity
+            checksums[capture.name] = SHA256.hash(data: Data(bitmap.bytes)).map { String(format: "%02x", $0) }.joined()
         }
         let data = try JSONSerialization.data(withJSONObject: opacities, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: directory.appendingPathComponent("opacities.json"))
+        try JSONSerialization.data(withJSONObject: checksums, options: [.prettyPrinted, .sortedKeys])
+            .write(to: directory.appendingPathComponent("checksums.json"))
         print("Rendered \(captures.count) Park frames on \(renderer.device.name)")
     }
 
+    #endif
+
+    /// Writes the moon layer of the Icon Composer icon: a 64 × 64 dithered moon from the application renderer, each dot
+    /// enlarged to 14 px without smoothing, centered on a transparent 1024 px canvas. The icon's fill is in its icon.json.
     public static func generateIcon(directory: URL) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var frame = MoonFrame()
         frame.level = 0.55
         frame.ditherRate = -1
         let dots = try MoonRenderer.shared.get().render(frame, pixels: 64)
-        // Preserve the approved rounded gradient surface as artwork. The moon is generated here by Metal.
-        let surfaceURL = try MoonRenderer.resource("IconSurface", extension: "png")
-        guard let source = CGImageSourceCreateWithURL(surfaceURL as CFURL, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
-              image.width == 1024, image.height == 1024, image.bitsPerPixel == 32,
-              image.alphaInfo == .last, let data = image.dataProvider?.data else { throw MoonRenderingError.imageCreation }
-        var bytes = [UInt8](Data(referencing: data))
-        let background = MoonBitmap(width: 1024, height: 1024, bytes: bytes)
-        try background.write(to: directory.appendingPathComponent("icon_surface.png"))
+        var bytes = [UInt8](repeating: 0, count: 1024 * 1024 * 4)
         for row in 0..<64 {
             for column in 0..<64 {
                 let sourceOffset = (row * 64 + column) * 4
@@ -196,43 +209,6 @@ import Metal
                 }
             }
         }
-        var bitmap = MoonBitmap(width: 1024, height: 1024, bytes: bytes)
-        try bitmap.write(to: directory.appendingPathComponent("icon_1024.png"))
-        for pixels in [512, 256, 128, 64, 32, 16] {
-            bitmap = halfSize(bitmap)
-            try bitmap.write(to: directory.appendingPathComponent("icon_\(pixels).png"))
-        }
-    }
-
-    /// Successive half-size, premultiplied bilinear reductions preserve the single master's dither.
-    private static func halfSize(_ source: MoonBitmap) -> MoonBitmap {
-        let width = source.width / 2
-        var result = [UInt8](repeating: 0, count: width * width * 4)
-        let normalization: Float = 1 / 255
-        for row in 0..<width {
-            for column in 0..<width {
-                let offsets = [((row * 2 + 1) * source.width + column * 2) * 4,
-                               ((row * 2 + 1) * source.width + column * 2 + 1) * 4,
-                               (row * 2 * source.width + column * 2) * 4,
-                               (row * 2 * source.width + column * 2 + 1) * 4]
-                var channels = [Int](repeating: 0, count: 4)
-                for channel in 0..<4 {
-                    var sum: Float = 0
-                    for offset in offsets {
-                        let value = channel == 3 ? Int(source.bytes[offset + channel])
-                            : (Int(source.bytes[offset + channel]) * Int(source.bytes[offset + 3]) + 127) / 255
-                        sum += Float(value) * normalization * 0.25
-                    }
-                    channels[channel] = Int((sum * 255).rounded(.toNearestOrEven))
-                }
-                let destination = (row * width + column) * 4
-                let alpha = channels[3]
-                for channel in 0..<3 {
-                    result[destination + channel] = alpha == 0 ? 0 : UInt8(clamping: Int((Double(channels[channel]) * 255 / Double(alpha)).rounded()))
-                }
-                result[destination + 3] = UInt8(clamping: alpha)
-            }
-        }
-        return MoonBitmap(width: width, height: width, bytes: result)
+        try MoonBitmap(width: 1024, height: 1024, bytes: bytes).write(to: directory.appendingPathComponent("moon.png"))
     }
 }

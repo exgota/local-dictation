@@ -16,7 +16,7 @@ import DictationCore
     private let parent: AXUIElement?
     private let hadUniqueIdentity: Bool
 
-    private init(processIdentifier: pid_t, applicationName: String, bundleIdentifier: String?,
+    init(processIdentifier: pid_t, applicationName: String, bundleIdentifier: String?,
                  focusedElement: AXUIElement?, wasSecure: Bool = false, setupTextTarget: SetupTextInsertionTarget? = nil) {
         self.processIdentifier = processIdentifier
         self.applicationName = applicationName
@@ -24,7 +24,7 @@ import DictationCore
         self.focusedElement = focusedElement
         self.setupTextTarget = setupTextTarget
         self.wasSecure = wasSecure || focusedElement.map { Accessibility.string($0, kAXSubroleAttribute) == kAXSecureTextFieldSubrole } == true
-            || SecureInputMonitor.currentHolder()?.processIdentifier == processIdentifier
+
         self.window = focusedElement.flatMap { Accessibility.element($0, kAXWindowAttribute) }
         self.parent = focusedElement.flatMap { Accessibility.element($0, kAXParentAttribute) }
         self.fieldIdentity = focusedElement.map { Accessibility.fieldIdentity($0) }
@@ -34,7 +34,7 @@ import DictationCore
     /// The same target with the element now focused in its application, for a target whose first query found none. Nil
     /// when the target already has an element, when another application is frontmost, or when the query finds none.
     func withFocusedElement() -> InsertionTarget? {
-        guard setupTextTarget == nil, focusedElement == nil, NSWorkspace.shared.frontmostApplication?.processIdentifier == processIdentifier,
+        guard processIdentifier != getpid(), setupTextTarget == nil, focusedElement == nil, NSWorkspace.shared.frontmostApplication?.processIdentifier == processIdentifier,
             let element = Accessibility.focusedElement(of: processIdentifier)
         else { return nil }
         return InsertionTarget(
@@ -47,13 +47,21 @@ import DictationCore
 
     static func current() -> InsertionTarget? {
         guard let application = NSWorkspace.shared.frontmostApplication else { return nil }
-        let setupTextTarget = application.processIdentifier == getpid() ? SetupTextInsertionTarget.current() : nil
-        return InsertionTarget(
+        return capture(
             processIdentifier: application.processIdentifier,
-            applicationName: application.localizedName ?? "the application",
-            bundleIdentifier: application.bundleIdentifier,
-            focusedElement: setupTextTarget == nil ? Accessibility.focusedElement(of: application.processIdentifier) : nil,
-            setupTextTarget: setupTextTarget)
+            applicationName: application.localizedName ?? "the application", bundleIdentifier: application.bundleIdentifier,
+            wasSecure: SecureInputMonitor.currentHolder()?.processIdentifier == application.processIdentifier,
+            focusedElement: { Accessibility.focusedElement(of: application.processIdentifier) },
+            setupTextTarget: SetupTextInsertionTarget.current)
+    }
+
+    /// A setup editor can only belong to this process. Its existence never redirects another application's dictation.
+    static func capture(processIdentifier: pid_t, applicationName: String, bundleIdentifier: String?, wasSecure: Bool,
+                        focusedElement: () -> AXUIElement?, setupTextTarget: () -> SetupTextInsertionTarget?) -> InsertionTarget {
+        let isOwnApplication = processIdentifier == getpid()
+        return InsertionTarget(processIdentifier: processIdentifier, applicationName: applicationName,
+                               bundleIdentifier: bundleIdentifier, focusedElement: isOwnApplication ? nil : focusedElement(),
+                               wasSecure: wasSecure, setupTextTarget: isOwnApplication ? setupTextTarget() : nil)
     }
 
     /// Returns the current object only after it has been matched to the immutable recording-time target.
@@ -186,20 +194,26 @@ enum Accessibility {
     private let target: InsertionTarget
     private var element: AXUIElement
     private let onLanded: @MainActor () -> Void
+    private let clipboardChangeCount: Int
 
-    private init(target: InsertionTarget, element: AXUIElement, onLanded: @escaping @MainActor () -> Void) {
+    private init(target: InsertionTarget, element: AXUIElement, clipboardChangeCount: Int,
+                 onLanded: @escaping @MainActor () -> Void) {
         self.target = target
         self.element = element
         self.onLanded = onLanded
+        self.clipboardChangeCount = clipboardChangeCount
     }
 
     /// Probes the target's focused element, then inserts `text`. Text is never sent to a different element.
     /// `onLanded` runs after Accessibility confirms arrival, or on the first clipboard read before the clipboard is restored.
     static func insert(
-        _ text: String, into target: InsertionTarget, onLanded: @escaping @MainActor () -> Void = {}
+        _ text: String, into target: InsertionTarget, clipboardChangeCount: Int? = nil,
+        onLanded: @escaping @MainActor () -> Void = {}
     ) async -> InjectionOutcome {
+        let clipboardChangeCount = clipboardChangeCount ?? NSPasteboard.general.changeCount
+        guard !Task.isCancelled else { return .cancelled }
+        guard !target.wasSecure else { return .refusedSecureField }
         if let setupTextTarget = target.setupTextTarget {
-            guard !target.wasSecure else { return .refusedSecureField }
             let outcome = setupTextTarget.insert(text)
             if case .inserted = outcome { onLanded() }
             return outcome
@@ -211,7 +225,7 @@ enum Accessibility {
         let decision = InjectionPlanner.decide(
             for: description,
             applicationIgnoresAccessibilityInsertion: applicationsIgnoringAccessibilityInsertion.contains(target.applicationKey))
-        let inserter = TextInserter(target: target, element: element, onLanded: onLanded)
+        let inserter = TextInserter(target: target, element: element, clipboardChangeCount: clipboardChangeCount, onLanded: onLanded)
         return await InjectionChain.run(prefixedForInsertionPoint(text, in: element), decision: decision, injector: inserter)
     }
 
@@ -288,7 +302,6 @@ enum Accessibility {
     /// Sets `AXSelectedText` and reads the field back for up to 0.5 s. Some web views accept the call without
     /// inserting; their field reads back unchanged, so the chain can then try paste without inserting twice.
     func insertViaAccessibility(_ text: String) async -> InjectionAttempt {
-        let clipboardChangeCount = NSPasteboard.general.changeCount
         let before = fieldState()
         guard AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success
         else { return .notDelivered }
@@ -307,13 +320,15 @@ enum Accessibility {
         let before = fieldState()
         let transaction = ClipboardPasteTransaction(pasteboard: SystemPasteboard(), clock: monotonicSeconds)
         let outcome = await transaction.paste(
-            text, postPasteShortcut: { Self.postKey(VirtualKey.letterV, flags: .maskCommand) }, onLanded: onLanded,
+            text, expectedChangeCount: clipboardChangeCount, postPasteShortcut: { Self.postKey(VirtualKey.letterV, flags: .maskCommand) }, onLanded: onLanded,
             showsText: { [self] in before.isReadable && showsArrival(of: text, since: before) })
         switch outcome {
         case .landed:
             return .delivered
         case .writeFailed:
             return .notDelivered
+        case .clipboardChanged:
+            return .uncertain(clipboard: .preserve)
         case .notRead:
             // The posted Command-V may still be handled late, so the transcript stays on the clipboard (never the
             // previous contents, which a late paste would insert) and nothing else is tried.
@@ -336,10 +351,16 @@ enum Accessibility {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    static func placeOnClipboardIfUnchanged(_ text: String, since changeCount: Int) {
-        let pasteboard = NSPasteboard.general
-        guard pasteboard.changeCount == changeCount, pasteboard.string(forType: .string) != text else { return }
-        placeOnClipboard(text)
+    @discardableResult static func placeOnClipboardIfUnchanged(
+        _ text: String, since changeCount: Int, pasteboard: NSPasteboard = .general
+    ) -> Bool {
+        guard pasteboard.changeCount == changeCount else { return false }
+        let alreadyCopied = pasteboard.string(forType: .string) == text
+        // Reading promised clipboard data may take time. Recheck immediately before clearing it.
+        guard pasteboard.changeCount == changeCount else { return false }
+        if alreadyCopied { return true }
+        pasteboard.clearContents()
+        return pasteboard.setString(text, forType: .string)
     }
 
     /// Adds a separating space when the text starts with a character that is neither whitespace nor punctuation and the

@@ -13,7 +13,14 @@ cp -R .build/release/LocalDictation_MoonRendering.bundle "$application/Contents/
 ditto .build/release/Sparkle.framework "$application/Contents/Frameworks/Sparkle.framework"
 cp .build/artifacts/sparkle/Sparkle/LICENSE "$application/Contents/Resources/Sparkle-LICENSE"
 cp Packaging/Info.plist "$application/Contents/Info.plist"
-cp Packaging/NOTICE Packaging/LICENSE Packaging/FluidAudio-LICENSE Packaging/AppIcon.icns "$application/Contents/Resources/"
+cp Packaging/NOTICE Packaging/LICENSE Packaging/FluidAudio-LICENSE "$application/Contents/Resources/"
+# Compiles the Icon Composer icon into Assets.car (the system's layered icon) and AppIcon.icns (older readers).
+icon_information=$(mktemp -d)
+xcrun actool Packaging/AppIcon.icon --compile "$application/Contents/Resources" --platform macosx \
+  --minimum-deployment-target 27.0 --app-icon AppIcon --output-partial-info-plist "$icon_information/Info.plist" \
+  --errors --warnings --output-format human-readable-text > "$icon_information/actool.log" ||
+  { cat "$icon_information/actool.log"; exit 1; }
+rm -rf "$icon_information"
 cp Packaging/Cues/Start.wav Packaging/Cues/Stop.wav "$application/Contents/Resources/Cues/"
 identity=$(security find-identity -p codesigning | awk '/"Local Dictation Development"/ {print $2; exit}')
 # Sparkle includes its installer, updater application, and XPC services inside the framework.

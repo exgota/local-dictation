@@ -155,10 +155,15 @@ final class InjectionPlannerTests: XCTestCase {
         var contents: [String] = ["original", "original-rich"]
         var failsWrite = false
         var afterFailedWrite: (() -> Void)?
+        var duringSnapshot: (() -> Void)?
         private var onDemandText: String?
         private var onRead: (@MainActor () -> Void)?
 
-        func takeSnapshot() -> [String] { contents }
+        func takeSnapshot() -> [String] {
+            let snapshot = contents
+            duringSnapshot?()
+            return snapshot
+        }
         func restore(_ snapshot: [String]) {
             changeCount += 1
             contents = snapshot
@@ -200,6 +205,31 @@ final class InjectionPlannerTests: XCTestCase {
         ClipboardPasteTransaction(
             pasteboard: pasteboard, timing: .init(readTimeout: 0.5, restoreDelay: 0.15, pollInterval: 0.005),
             clock: { ProcessInfo.processInfo.systemUptime })
+    }
+
+    func testClipboardCopiedAfterStopPreventsPasteAndPreservesEveryItem() async {
+        let pasteboard = FakePasteboard()
+        let stoppedChangeCount = pasteboard.changeCount
+        pasteboard.externalWrite("newer clipboard marker")
+        pasteboard.contents.append("newer rich text")
+        let newerChangeCount = pasteboard.changeCount
+        let outcome = await transaction(pasteboard).paste("transcript", expectedChangeCount: stoppedChangeCount,
+            postPasteShortcut: { XCTFail("A newer clipboard must not be pasted into the target") },
+            onLanded: { XCTFail("No text was delivered") })
+        XCTAssertEqual(outcome, .clipboardChanged)
+        XCTAssertEqual(pasteboard.contents, ["newer clipboard marker", "newer rich text"])
+        XCTAssertEqual(pasteboard.changeCount, newerChangeCount)
+    }
+
+    func testClipboardCopiedWhileSnapshotLoadsPreventsPaste() async {
+        let pasteboard = FakePasteboard()
+        let stoppedChangeCount = pasteboard.changeCount
+        pasteboard.duringSnapshot = { pasteboard.externalWrite("copied while promised data loads") }
+        let outcome = await transaction(pasteboard).paste("transcript", expectedChangeCount: stoppedChangeCount,
+            postPasteShortcut: { XCTFail("The snapshot became stale before the write") })
+        XCTAssertEqual(outcome, .clipboardChanged)
+        XCTAssertEqual(pasteboard.contents, ["copied while promised data loads"])
+        XCTAssertEqual(pasteboard.changeCount, stoppedChangeCount + 1)
     }
 
     func testFailedWriteRestoresClipboardWithoutPostingPaste() async {

@@ -16,21 +16,6 @@ struct InstallationCheck {
         return signingIdentity != previousSigningIdentity
     }
 
-    /// Warnings for the user: at most one about the bundle's location (translocation takes precedence over quarantine)
-    /// and one about a changed signing identity. Empty when neither applies.
-    var warnings: [String] {
-        var warnings: [String] = []
-        if isTranslocated {
-            warnings.append("Local Dictation is running from a temporary location macOS assigned to a downloaded app. Move it to Applications and open it from there.")
-        } else if isQuarantined {
-            warnings.append("Local Dictation is marked as downloaded from the internet. Move it to Applications and open it once from there.")
-        }
-        if signingIdentityChanged {
-            warnings.append("This build is signed differently from the last one, so macOS may have reset Microphone and Accessibility. Check the permissions below.")
-        }
-        return warnings
-    }
-
     var doctorChecks: [DoctorReport.Check] {
         [
             DoctorReport.Check(

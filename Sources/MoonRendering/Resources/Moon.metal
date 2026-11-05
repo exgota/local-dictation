@@ -21,6 +21,9 @@ float smoothing(float lower, float upper, float value) {
 #define uLevel values[3]
 #define uShake values[4]
 #define uWarn values[5]
+#define uPark values[18]
+#define uParkSource (values[19] > .5)
+#define uParkSourceWeight values[20]
 #define uForm values[6]
 #define uMix values[7]
 #define uRate values[8]
@@ -30,11 +33,13 @@ float smoothing(float lower, float upper, float value) {
 #define uA int(values[12])
 #define uB int(values[13])
 #define uInk float3(values[14], values[15], values[16])
+#define uReduceMotion (values[17] > .5)
 
 struct MoonShader {
 constant float *values;
 texture2d<float> legend;
 texture2d<float> moon;
+texture2d<float> parkedSource;
 // Full-precision interpolation keeps the legend and lunar relief independent of hardware sampler precision.
 float4 sampleLevel(texture2d<float> texture, float2 coordinates, uint mip, bool clampsVertical) {
     int2 extent = int2(texture.get_width(mip), texture.get_height(mip));
@@ -71,7 +76,6 @@ float referenceCosine(float angle) {
     return fma(fma(74.4388908503519f, squared, -41.16936742016338f), squared, 6.28230854637602f) * coordinate;
 }
 float hash(float2 p){return fract(referenceSine(dot(p,float2(127.1,311.7)))*43758.5453);}
-float2x2 rot(float a){float c=referenceCosine(a),s=referenceSine(a);return float2x2(float2(c,-s),float2(s,c));}
 float circle(float2 p,float r){return length(p)-r;}
 float box(float2 p,float2 b,float r){float2 d=abs(p)-b+r;return length(max(d,0.))+min(max(d.x,d.y),0.)-r;}
 float seg(float2 p,float2 a,float2 b){float2 pa=p-a,ba=b-a;return length(pa-ba*clamp(dot(pa,ba)/dot(ba,ba),0.,1.));}
@@ -88,7 +92,8 @@ float solid(int id,float3 p){
   if(id==0)return length(p)-.62;
   float2 q=float2(shape(id,p.xy)+.04,abs(p.z)-(id==2?.05:.16));return min(max(q.x,q.y),0.)+length(max(q,0.))-.04;}
 float3x3 M;
-float scene(float3 w){float3 p=M*w;return uMix<=.001?solid(uA,p):uMix>=.999?solid(uB,p):mix(solid(uA,p),solid(uB,p),uMix);}
+float verticalOffset;
+float scene(float3 w){float3 p=M*(w-float3(0.,verticalOffset,0.));return uMix<=.001?solid(uA,p):uMix>=.999?solid(uB,p):mix(solid(uA,p),solid(uB,p),uMix);}
 float3 normal(float3 p){const float2 k=float2(1,-1);float e=.004;return normalize(k.xyy*scene(p+k.xyy*e)+k.yyx*scene(p+k.yyx*e)+k.yxy*scene(p+k.yxy*e)+k.xxx*scene(p+k.xxx*e));}
 float lunar(float3 o,float3 Lo,float3 Vo){
   float2 uv=float2(atan2(o.x,o.z)/6.28318+.5,asin(clamp(o.y,-1.,1.))/3.14159+.5);
@@ -103,6 +108,9 @@ float lunar(float3 o,float3 Lo,float3 Vo){
   float earthshine=.075+.06*alb;
   return clamp(max((.12+.86*alb)*shade*1.04,earthshine),0.,1.);}
 float solidTone(float2 uv){
+  // One slow cycle moves the object through 3% of its approximately 1.24-unit height.
+  float rise=!uReduceMotion?.5-.5*referenceCosine(uTime*6.28318530718/3.):0.;
+  verticalOffset=.0372*rise;
   float keyWeight=uB==2?uMix:uA==2?1.-uMix:0.,moonWeight=uB==0?uMix:uA==0?1.-uMix:0.;
   float flip=uMix*uMix*(3.-2.*uMix);
   float yaw=uTime*1.15+6.28318*flip,pitch=mix(.3,.1,moonWeight)+.08*referenceSine(uTime*.7);
@@ -112,7 +120,7 @@ float solidTone(float2 uv){
   float b=dot(ro,rd),c=dot(ro,ro)-1.69,h=b*b-c;
   if(h>0.){float t=max(-b-sqrt(h),0.),tm=-b+sqrt(h);
     for(int i=0;i<56;i++){float d=scene(ro+rd*t);
-      if(d<.002){float3 at=ro+rd*t,pm=M*at,n=normal(at);
+      if(d<.002){float3 at=ro+rd*t,pm=M*(at-float3(0.,verticalOffset,0.)),n=normal(at);
         float l=clamp(.14+.86*max(dot(n,L),0.)+.2*pow(1.-max(dot(n,-rd),0.),3.),0.,1.);
         float tone=.12+.82*(1.-l);
         if(keyWeight>.01){float face=smoothing(.9,.99,abs(dot(M*n,float3(0,0,1))));
@@ -137,7 +145,11 @@ float solidTone(float2 uv){
   if(moonWeight>.5&&uPhase>0.&&uPhase<1.){float a=atan2(uv.y,uv.x),bin=floor(a/6.28318*30.),hb=DownloadStreamSeeds[clamp(int(bin)+15,0,30)],f=fract(uTime*(.45+.5*hb)+hb*3.);
     float ca=(bin+.5)/30.*6.28318,rad=1.02-f*.46;aura=smoothing(.028,.01,length(uv-float2(referenceCosine(ca),referenceSine(ca))*rad))*f;}
   if(moonWeight>.5&&uPhase>1.){float k=(uPhase-1.)/.5;aura=max(aura,smoothing(.03,0.,abs(length(uv)-(.54+k*.48)))*(1.-k));}
-  if(rd.y<0.){float3 g=ro+rd*((-.82-ro.y)/rd.y);return max(aura,(1.-smoothing(.1,.75,length((g.xz-float2(.18,-.05))*float2(1,1.6))))*.22);}
+  if(rd.y<0.){
+    float3 g=ro+rd*((-.82-ro.y)/rd.y);
+    float radius=length(g.xz*float2(1.,1.6))/mix(.56,.47,rise);
+    float falloff=pow(max(0.,1.-radius*radius),3.);
+    return max(aura,falloff*.16*mix(1.,.65,rise));}
   return aura;}
 
 float maria(float3 n){float2 s=n.xy;
@@ -149,6 +161,35 @@ float microphoneMark(float2 p){p/=1.18;
   float stem=seg(p,float2(0,-.13),float2(0,-.27))-.044;
   float base=seg(p,float2(-.12,-.285),float2(.12,-.285))-.044;
   return min(min(head,cradle),min(stem,base))*1.18;}
+// Original 56-unit document geometry, centered and scaled as in the pitch.
+float copyMark(float2 p){
+  // Fit the 1.3-scaled canvas to the microphone mark's approximately .82-unit height.
+  const float scale=1.3/44.;
+  float2 q=float2(p.x,-p.y)/scale+float2(28.5,27.5);
+  float back=abs(box(q-float2(25.5,24.25),float2(8.,9.75),4.))-1.2;
+  float front=box(q-float2(30.75,30.75),float2(8.25,10.25),4.);
+  // Clear the back outline around the front page, like the struck microphone's slash.
+  back=max(back,1.1-front);
+  float lines=min(seg(q,float2(26.5,26.5),float2(35.,26.5)),
+                  min(seg(q,float2(26.5,30.5),float2(35.,30.5)),
+                      seg(q,float2(26.5,34.5),float2(32.,34.5))))-.85;
+  return min(back,max(front,-lines))*scale;
+}
+float2 parkedSample(float2 p){
+  float2 at=(p*float2(.5,-.5)+.5)*uRes-.5;
+  int2 first=int2(floor(at)),limit=int2(uRes)-1;float2 weight=fract(at);
+  float lower=mix(parkedSource.read(uint2(clamp(first,int2(0),limit))).r,
+                  parkedSource.read(uint2(clamp(first+int2(1,0),int2(0),limit))).r,weight.x);
+  float upper=mix(parkedSource.read(uint2(clamp(first+int2(0,1),int2(0),limit))).r,
+                  parkedSource.read(uint2(clamp(first+int2(1,1),int2(0),limit))).r,weight.x);
+  float tone=parkedSource.read(uint2(clamp(int2(floor(at+.5)),int2(0),limit))).g;
+  return float2(mix(lower,upper,weight.y),tone);
+}
+float copied(float2 p,float w,float R){
+  float distance=mix(length(p)-R,copyMark(p),w);
+  if(uParkSource&&!uReduceMotion)distance+=uParkSourceWeight*(parkedSample(p).x-(length(p)-R));
+  return distance;
+}
 float muted(float2 p,float w,float R){return mix(length(p)-R,microphoneMark(p),w);}
 float loadingTone(float2 p,float R){
   float r=length(p),e=r/R,t=uTime;
@@ -168,6 +209,25 @@ float orbTone(float2 c){
   float a=atan2(p.y,p.x),r=length(p),w=smoothing(0.,1.,uWarn),lv=uLevel;
   float ripple=uRate<0.?0.:1.;
   float R=uRate<0.?.7:((.42+.2*pow(lv,.7)+ripple*lv*(.02*referenceSine(a*5.+uTime*8.)+.015*referenceSine(a*3.-uTime*6.))));
+  float park=clamp(uPark,0.,1.);
+  if(park>.001||(uParkSource&&uParkSourceWeight>.001)){
+    float shapeWeight=uReduceMotion?1.:park;
+    float e=1./uRes.y,d=copied(p,shapeWeight,R),mark=0.;
+    if(d<=0.){
+      float2 g=float2(copied(p+float2(e,0),shapeWeight,R)-copied(p-float2(e,0),shapeWeight,R),
+                      copied(p+float2(0,e),shapeWeight,R)-copied(p-float2(0,e),shapeWeight,R))/(2.*e);
+      float3 nb=normalize(float3(g*(1.-clamp(-d/.07,0.,1.))*1.8,1.));
+      float2 q=p/R;float3 ns=float3(q,sqrt(max(1.-dot(q,q),0.)));
+      float original=moonTone(ns,r/R);
+      if(uParkSource)original=mix(original,parkedSample(p).y,clamp(uParkSourceWeight/max(1.-park,.000001),0.,1.));
+      mark=mix(original,.62+.36*clamp(.2+.8*max(dot(nb,SUN),0.),0.,1.),shapeWeight);
+    }
+    if(!uReduceMotion)return mark;
+    float2 q=p/R;
+    float original=r<R?moonTone(float3(q,sqrt(max(1.-dot(q,q),0.))),r/R):0.;
+    if(uParkSource)original=mix(original,parkedSample(p).y,clamp(uParkSourceWeight/max(1.-park,.000001),0.,1.));
+    return mix(original,mark,park);
+  }
   if(w>.001){
     if(w>.78){float2 sa=float2(-.34,.38),sb=mix(sa,float2(.34,-.38),smoothing(.78,1.,w));float sl=seg(p,sa,sb);
       if(sl<.028)return .96;if(sl<.066)return 0.;}
@@ -180,13 +240,14 @@ float orbTone(float2 c){
   if(r<R){float2 q=p/R;return moonTone(float3(q,sqrt(max(1.-dot(q,q),0.))),r/R);}
   return 0.;}
 float4 shade(float4 position){
-  float2 fc=float2(position.x, uRes.y-position.y),centered=fc-.5*uRes,cell=floor(fc),uv=centered/(uRes.y*.5);
+  float2 fc=float2(position.x, uRes.y-position.y);
+  float2 centered=fc-.5*uRes,cell=floor(fc),uv=centered/(uRes.y*.5);
   float k=1.-uForm;k*=k;
   float ang=atan2(uv.y,uv.x),edge=.8+.1*referenceSine(ang*3.+uTime*.6)+.07*referenceSine(ang*5.-uTime*.9);
   float fall=1.-smoothing(edge-.6,edge+.12,length(uv));
   float2 jit=float2(hash(cell),hash(cell+17.3))-.5;
   jit+=.18*float2(referenceSine(uTime*1.7+hash(cell+3.1)*6.283),referenceCosine(uTime*1.4+hash(cell+9.7)*6.283));
-  float2 s=rot(k*(2.6+uTime*.35))*uv*(1.+k*1.4)+jit*k*2.6;
+  float2 s=uv*(1.+k*1.4)+jit*k*2.6;
   float tone;
   if(uMode==1)tone=orbTone(s*uRes.y*.5);
   else tone=solidTone(s);
@@ -199,7 +260,7 @@ float4 shade(float4 position){
 #endif
   float on;
   if(tone<1./17.)on=0.;else if(tone>16./17.)on=1.;
-  else{float f=floor(uTime*uRate);float2 q=mod(floor(centered)+float2(f,f*3.),4.);on=step(float(BayerThresholds[int(q.y)*4+int(q.x)]+1)/17.,tone);}
+  else{float f=floor(uTime*uRate);float2 q=mod(floor(float2(position.x,uRes.y-position.y)-.5*uRes)+float2(f,f*3.),4.);on=step(float(BayerThresholds[int(q.y)*4+int(q.x)]+1)/17.,tone);}
   return on>.5?float4(uInk,1.):float4(0.);
 }
 };
@@ -208,7 +269,8 @@ vertex float4 moonVertex(uint identifier [[vertex_id]]) {
     return float4(positions[identifier],0,1);
 }
 fragment float4 moonFragment(float4 position [[position]], constant float *values [[buffer(0)]],
-                             texture2d<float> legend [[texture(0)]], texture2d<float> moon [[texture(1)]]) {
-    MoonShader shader{values,legend,moon};
+                             texture2d<float> legend [[texture(0)]], texture2d<float> moon [[texture(1)]],
+                             texture2d<float> parkedSource [[texture(2)]]) {
+    MoonShader shader{values,legend,moon,parkedSource};
     return shader.shade(position);
 }

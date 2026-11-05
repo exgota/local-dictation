@@ -8,7 +8,9 @@ import Metal
         case bitmap(MoonBitmap)
     }
     public var drawing: ((TimeInterval) -> Drawing?)?
+    public private(set) var isPreparingFrame = false
     public private(set) var currentBitmap: MoonBitmap?
+    public private(set) var currentShader: MoonFrame?
     public private(set) var renderedFrames = 0
     public private(set) var timerIsRunning = false
     private var requested = false
@@ -74,6 +76,8 @@ import Metal
 
     /// Prepares the first visible content while the window is still hidden, without starting its display timer.
     @discardableResult public func prepareFrame() -> Bool {
+        isPreparingFrame = true
+        defer { isPreparingFrame = false }
         guard let drawing = drawing?(ProcessInfo.processInfo.systemUptime) else { return false }
         return render(drawing)
     }
@@ -91,6 +95,7 @@ import Metal
                 try renderer.draw(frame, into: texture!)
                 bitmap = renderer.bitmap(from: texture!)
             }
+            if case .shader(let frame) = drawing { currentShader = frame }
             currentBitmap = bitmap
             CATransaction.begin()
             CATransaction.setDisableActions(true)

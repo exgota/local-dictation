@@ -1,12 +1,11 @@
-// Draws one 1024 px moon master with the application's Metal renderer, then scales that master for every icon size.
+// Draws the moon layer of Packaging/AppIcon.icon with the application's Metal renderer. The icon's fill, shadow and
+// layer settings live in Packaging/AppIcon.icon/icon.json, which Icon Composer opens and edits.
 // Run from the repository: swift Tools/GenerateApplicationIcon.swift
 
 import Foundation
 
 let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
 let directory = FileManager.default.temporaryDirectory.appendingPathComponent("LocalDictationIcon-" + UUID().uuidString, isDirectory: true)
-let iconset = directory.appendingPathComponent("AppIcon.iconset", isDirectory: true)
-try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 defer { try? FileManager.default.removeItem(at: directory) }
 
 func run(_ executable: String, arguments: [String]) throws {
@@ -23,12 +22,7 @@ func run(_ executable: String, arguments: [String]) throws {
 try run("/usr/bin/xcrun", arguments: ["swift", "build", "--jobs", "1", "--product", "LocalDictation"])
 try run(repository.appendingPathComponent(".build/debug/LocalDictation").path,
         arguments: ["--generate-application-icon", directory.path])
-for points in [16, 32, 128, 256, 512] {
-    try FileManager.default.copyItem(at: directory.appendingPathComponent("icon_\(points).png"),
-                                     to: iconset.appendingPathComponent("icon_\(points)x\(points).png"))
-    try FileManager.default.copyItem(at: directory.appendingPathComponent("icon_\(points * 2).png"),
-                                     to: iconset.appendingPathComponent("icon_\(points)x\(points)@2x.png"))
-}
-let output = repository.appendingPathComponent("Packaging/AppIcon.icns")
-try run("/usr/bin/iconutil", arguments: ["--convert", "icns", "--output", output.path, iconset.path])
+let output = repository.appendingPathComponent("Packaging/AppIcon.icon/Assets/moon.png")
+try? FileManager.default.removeItem(at: output)
+try FileManager.default.copyItem(at: directory.appendingPathComponent("moon.png"), to: output)
 print("Wrote \(output.path)")

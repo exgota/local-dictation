@@ -13,10 +13,12 @@ You need a Mac with Apple silicon, macOS 27 or later, and about 2.5 GB of free s
 takes about 1.3 GB after that.
 
 1. Download `Local-Dictation.zip` from [Releases](https://github.com/exgota/local-dictation/releases), unzip it, and
-   move Local Dictation to Applications.
-2. Open it. The app is not notarized by Apple, so the first time macOS says it cannot verify the app. Click Done.
+   open Local Dictation.
+2. The app is not notarized by Apple, so the first time macOS says it cannot verify the app. Click Done.
 3. Open System Settings → Privacy & Security, scroll to Security, and click Open Anyway next to Local Dictation. Confirm
-   with your password. From then on it opens normally.
+   with your password.
+4. Choose Move to Applications when the app offers. It moves itself and reopens. Choose Not Now to use it where it is;
+   it will offer again on the next launch.
 
 Setup then walks through four steps, one at a time:
 
@@ -30,7 +32,8 @@ Setup then walks through four steps, one at a time:
 ![Setup downloading the speech model](docs/screenshots/setup-dark.png)
 
 After setup the app lives in the menu bar as a waveform. Click it to start dictation, paste your last dictation, open
-history, pause the shortcuts or open Settings.
+history, pause the shortcuts or open Settings. The menu starts with Start dictation and has no state line. Paste last
+text shows its configured shortcut, normally ⌥⇧V, using the native menu key equivalent.
 
 ## Updates
 
@@ -44,7 +47,8 @@ Versions before 1.1 cannot check, so install 1.1 by hand once.
 - **You can start right after launch.** After setup, if the speech model is still loading when you press Fn, the app
   records anyway and types your words once the model is ready. If the model fails to load, or is still not ready two
   minutes after you start recording, a sound plays and the recording stays in memory until the model recovers, you
-  cancel it or you quit. Recovered text is parked as described below.
+  cancel it or you quit. After you stop, a pending transcription has at most two more minutes to finish; a timeout
+  ends that delivery with a logged reason. Recovered text is parked as described below.
 - **The text is typed where you were working,** and your clipboard is put back the way it was.
 - **When it cannot type,** because focus moved or there is no text field, a small moon parks beside the big one and the
   text goes on the clipboard: press ⌘V. If the dictation is no longer on your clipboard, use Paste last text from the
@@ -60,7 +64,7 @@ Versions before 1.1 cannot check, so install 1.1 by hand once.
   Correction. Text files are saved as Markdown, by default to `~/Desktop/Transcripts/<date>/`.
 - **The microphone is on only while you dictate.**
 - **A lock on the menu bar icon** means another app, such as a password manager or Terminal's Secure Keyboard Entry, is
-  holding secure input, so Fn cannot reach Local Dictation. The menu names the app when it can tell.
+  holding secure input, so Fn cannot reach Local Dictation. Hover over the icon to see which app holds it, when known.
 
 ![Settings](docs/screenshots/settings-dark.png)
 
@@ -74,7 +78,7 @@ little to wait for when you stop. [docs/SPEC.md](docs/SPEC.md) has the measureme
 
 Local Dictation recognizes speech on your Mac and does not upload your audio or text. The app does not save recordings.
 Transcripts are saved only if you turn on history (kept in `~/Library/Application Support/LocalDictation/`) or text
-files. Clearing history does not delete text files. Your last dictation stays in memory until the next one or until you
+files. Clearing history does not delete text files. Your last usable dictation stays in memory until another usable transcript replaces it or until you
 quit, so you can paste it again. Once text is typed or pasted into another app, that app decides what happens to it.
 
 The app goes online only to download the speech and voice activity models from Hugging Face, and to check GitHub for

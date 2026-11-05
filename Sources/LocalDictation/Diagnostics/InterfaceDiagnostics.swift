@@ -46,23 +46,7 @@ import TranscriptHistory
         try capture(HistoryView(pipeline: pipeline, entries: entries, loadsArchive: false, selection: 1).frame(width: 660, height: 470), name: "history", title: "History", directory: directory)
         try capture(HistoryView(pipeline: pipeline, entries: entries, loadsArchive: false).frame(width: 660, height: 470), name: "history_no_selection", title: "History", directory: directory)
         try capture(HistoryView(pipeline: pipeline, loadsArchive: false).frame(width: 660, height: 470), name: "history_empty", title: "History", directory: directory)
-        let menu = NSMenu()
-        StatusMenu.populate(menu, state: .init(canPaste: true, keepsHistory: true, opensAtLogin: true), target: nil)
-        let menuView = MenuDiagnosticView(menu: menu)
-        try capture(menuView, name: "menu", directory: directory)
-        let updateMenu = NSMenu()
-        StatusMenu.populate(updateMenu, state: .init(canPaste: true, keepsHistory: true, opensAtLogin: true,
-                                                   hasPendingUpdate: true), target: nil)
-        try capture(MenuDiagnosticView(menu: updateMenu), name: "menu_update_available", directory: directory)
-        for state in StatusMenu.HeaderState.allCases {
-            let stateMenu = NSMenu()
-            StatusMenu.populate(stateMenu, state: .init(header: state,
-                                                      detail: state == .blocked ? "Safari is using secure input" : "",
-                                                      recording: state == .listening,
-                                                      canPaste: true, keepsHistory: true, paused: state == .paused,
-                                                      opensAtLogin: true), target: nil)
-            try capture(MenuDiagnosticView(menu: stateMenu), name: "menu_\(state)", directory: directory)
-        }
+        try renderMenu(directory: directory)
         for (name, icon) in [("plain", StatusItemIcon.normal), ("lock", StatusItemIcon.blocked)] {
             let view = NSImageView(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
             view.image = icon.image
@@ -70,9 +54,47 @@ import TranscriptHistory
             view.contentTintColor = .labelColor
             try capture(view, name: "status_icon_" + name, directory: directory)
         }
-        let rows = menu.items.map { $0.isSeparatorItem ? "<separator>" : $0.title }
-        try rows.joined(separator: "\n").write(to: directory.appendingPathComponent("menu-items.txt"), atomically: true, encoding: .utf8)
         print("Rendered production interface views without starting application services.")
+    }
+
+    static func renderMenu(directory: URL) throws {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.prohibited)
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let states: [(String, StatusMenu.State)] = [
+            ("menu", .init(canPaste: true, keepsHistory: true, opensAtLogin: true)),
+            ("menu_empty", .init()),
+            ("menu_recording", .init(recording: true, canPaste: true)),
+            ("menu_update_available", .init(canPaste: true, keepsHistory: true, opensAtLogin: true, hasPendingUpdate: true)),
+        ]
+        for (name, state) in states {
+            let menu = NSMenu()
+            StatusMenu.populate(menu, state: state, target: nil)
+            try capture(MenuDiagnosticView(menu: menu), name: name, directory: directory)
+        }
+        try "Production NSMenu model with AppKit text and separators, dark at 2x. Tracking and compositor vibrancy need a desktop check.\n"
+            .write(to: directory.appendingPathComponent("render.txt"), atomically: true, encoding: .utf8)
+    }
+
+    static func renderMoveAlert(directory: URL) throws {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.prohibited)
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let alert = ApplicationRelocation.makeMoveAlert()
+        // The unbundled diagnostics executable borrows the icon of the most recent build.
+        if FileManager.default.fileExists(atPath: "dist/Local Dictation.app") {
+            alert.icon = NSWorkspace.shared.icon(forFile: "dist/Local Dictation.app")
+        }
+        alert.window.appearance = NSAppearance(named: .darkAqua)
+        alert.layout()
+        alert.window.layoutIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        guard let frame = alert.window.contentView?.superview else { throw CocoaError(.fileWriteUnknown) }
+        try capture(frame, name: "move-to-applications", directory: directory)
+        try "The production NSAlert frame view, dark at 2x. The alert was not shown and no application was moved or relaunched.\n"
+            .write(to: directory.appendingPathComponent("render.txt"), atomically: true, encoding: .utf8)
     }
 
     private static func capture<Content: View>(_ view: Content, name: String, title: String = "Local Dictation Settings", directory: URL) throws {
@@ -91,7 +113,11 @@ import TranscriptHistory
     private static func capture(_ view: NSView, name: String, directory: URL) throws {
         view.appearance = NSAppearance(named: .darkAqua)
         view.layoutSubtreeIfNeeded()
-        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw CocoaError(.fileWriteUnknown) }
+        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil,
+            pixelsWide: Int(view.bounds.width * 2), pixelsHigh: Int(view.bounds.height * 2),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { throw CocoaError(.fileWriteUnknown) }
+        bitmap.size = view.bounds.size
         view.cacheDisplay(in: view.bounds, to: bitmap)
         guard let data = bitmap.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
         try data.write(to: directory.appendingPathComponent(name + ".png"))
@@ -113,15 +139,14 @@ import TranscriptHistory
     }
 }
 
-/// The real menu model and header, using AppKit text and separators offscreen. Tracking and vibrancy require a desktop session.
+/// The real menu model, using AppKit text and separators offscreen. Tracking and vibrancy require a desktop session.
 @MainActor private final class MenuDiagnosticView: NSView {
     private let sourceMenu: NSMenu
     override var isFlipped: Bool { true }
     init(menu: NSMenu) {
         self.sourceMenu = menu
-        let height = menu.items.reduce(CGFloat(12)) { $0 + ($1.view?.frame.height ?? ($1.isSeparatorItem ? 12 : 24)) }
+        let height = menu.items.reduce(CGFloat(12)) { $0 + ($1.isSeparatorItem ? 12 : 24) }
         super.init(frame: NSRect(x: 0, y: 0, width: 268, height: height))
-        if let header = menu.items.first?.view { header.frame.origin = CGPoint(x: 8, y: 6); addSubview(header) }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
     override func draw(_ dirtyRect: NSRect) {
@@ -129,7 +154,6 @@ import TranscriptHistory
         NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8).fill()
         var top: CGFloat = 6
         for item in sourceMenu.items {
-            if let view = item.view { top += view.frame.height; continue }
             let height: CGFloat = item.isSeparatorItem ? 12 : 24
             let frame = NSRect(x: 8, y: top, width: 252, height: height)
             if item.isSeparatorItem {

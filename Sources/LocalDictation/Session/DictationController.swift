@@ -15,7 +15,7 @@ import os
     enum Trigger { case hold, toggle, locked }
 
     @Published private(set) var phase: Phase = .idle { didSet { publishTapState() } }
-    /// The latest transcript, kept in memory only until the next dictation starts or the app quits, so a failed paste
+    /// The latest transcript, kept in memory only until another usable transcript replaces it or the app quits, so a failed paste
     /// is recoverable.
     @Published private(set) var lastTranscript: String?
     @Published private(set) var lastMessage: String?
@@ -52,13 +52,17 @@ import os
         let appearance: HeadsUpDisplayController.StoppedAppearance?
         let task: Task<Void, Never>
         let streaming: RecordingTranscription
+        let lifecycle: DeliveryLifecycle
+        let target: InsertionTarget?
+        let clipboardChangeCount: Int
+        var result: StreamingTranscriptionResult?
     }
 
     private var recording: Recording?
     /// A delivery is removed when it finishes or is cancelled, so its task checks membership after every suspension.
     private var deliveries: [UUID: Delivery] = [:]
     /// Each delivery waits for the previous one before inserting, so transcripts land in the order they were spoken.
-    private var latestDelivery: Task<Void, Never>?
+    private var latestDelivery: DeliveryLifecycle?
     private var subscriptions: Set<AnyCancellable> = []
     private var hotkeyInstallTimer: Timer?
     private var deadlineTimer: Timer?
@@ -161,9 +165,6 @@ import os
         }
         guard hotkeySuspensionReasons.isEmpty else { return }
         if event.kind == .keyDown && !event.isRepeat {
-            if event.keyCode == VirtualKey.letterV && ModifierSet(eventFlags: event.flags) == .command {
-                headsUpDisplay.observePaste(clipboardChangeCount: NSPasteboard.general.changeCount)
-            }
             if event.keyCode == VirtualKey.escape && headsUpDisplay.isParked { headsUpDisplay.dismissPark() }
         }
         guard let input = event.hotkeyInput else { return }
@@ -231,11 +232,11 @@ import os
     }
 
     func repasteLastTranscript() {
-        guard phase == .idle, let lastTranscript, let target = InsertionTarget.current() else { return }
-        headsUpDisplay.releasePark()
+        let text = lastTranscript
+        let target = InsertionTarget.current()
         Task {
-            let outcome = await TextInserter.insert(lastTranscript, into: target)
-            dictationLog.notice("re-paste into \(target.applicationName): \(String(describing: outcome))")
+            _ = await LastTranscriptPaste.perform(text: text, target: target,
+                onInserted: { self.headsUpDisplay.releasePark() })
         }
     }
 
@@ -303,7 +304,6 @@ import os
         recording = Recording(identifier: identifier, trigger: trigger, target: target, streaming: streaming)
         dictationLog.notice("recording started (\(String(describing: trigger))) target \(target?.applicationName ?? "none")\(self.deliveries.isEmpty ? "" : ", \(self.deliveries.count) still transcribing")")
         if let target, target.focusedElement == nil, target.setupTextTarget == nil { completeTarget(target, recording: identifier) }
-        lastTranscript = nil
         lastMessage = nil
         updatePhase()
         headsUpDisplay.showListening(on: NSScreen.screenWithMouse())
@@ -352,6 +352,7 @@ import os
     /// clipboard with an explanation instead of being pasted.
     func finishRecording(interruption: Error? = nil) {
         guard let recording else { return }
+        let clipboardChangeCount = NSPasteboard.general.changeCount
         let held = recorder.elapsed
         let audioSeconds = recorder.finish()
         let stopTime = Date()
@@ -373,18 +374,18 @@ import os
         }
         let identifier = recording.identifier
         let target = recording.target
-        let clipboardChangeCount = NSPasteboard.general.changeCount
         let previous = latestDelivery
+        let lifecycle = DeliveryLifecycle(predecessor: previous)
         let task = Task { [weak self] in
             let result: StreamingTranscriptionResult
             do {
                 result = try await streaming.finish()
             } catch {
                 guard let self, self.deliveries[identifier] != nil, !Task.isCancelled else { return }
-                await previous?.value
+                await previous?.waitUntilFinished()
                 guard self.deliveries[identifier] != nil, !Task.isCancelled else { return }
                 NSSound.beep()
-                self.finishDelivery(identifier, message: error.localizedDescription)
+                self.finishDelivery(identifier, outcome: .refused(error.localizedDescription))
                 return
             }
             guard let self, self.deliveries[identifier] != nil, !Task.isCancelled else {
@@ -392,25 +393,26 @@ import os
                 return
             }
             dictationLog.notice("transcribed \(result.chunkCount) windows, \(String(format: "%.1f", result.transcribedSeconds)) s of model input from \(String(format: "%.1f", result.audioSeconds)) s recorded: \(result.text.count) characters, stop to result \(String(format: "%.3f", Date().timeIntervalSince(stopTime))) s, of which model \(String(format: "%.3f", result.processingSecondsAfterEnd)) s")
-            await previous?.value
+            self.deliveries[identifier]?.result = result
+            lifecycle.armDeadline(after: DeliveryLifecycle.insertionTimeout) { [weak self] in
+                self?.deliveryTimedOut(identifier)
+            }
+            await previous?.waitUntilFinished()
             guard self.deliveries[identifier] != nil, !Task.isCancelled else { return }
-            if let interruption {
-                guard !result.text.isEmpty else { return self.finishDelivery(identifier, message: interruption.localizedDescription) }
-                if streaming.beganDuringLoading {
-                    await self.deliver(result.text, audioSeconds: result.audioSeconds, target: target, delivery: identifier,
-                                       recovery: .microphoneDisconnected, clipboardChangeCount: clipboardChangeCount)
-                    return
-                }
-                self.lastTranscript = result.text
-                self.showMiss(result.text, reason: .microphoneDisconnected, onClipboard: true, delivery: identifier)
+            if let interruption, result.text.isEmpty {
+                self.finishDelivery(identifier, outcome: .refused(interruption.localizedDescription))
                 return
             }
             await self.deliver(result.text, audioSeconds: result.audioSeconds, target: target, delivery: identifier,
-                               recovery: streaming.requiresRecovery ? .modelUnavailable : nil,
+                               recovery: interruption != nil ? .microphoneDisconnected : streaming.requiresRecovery ? .modelUnavailable : nil,
                                clipboardChangeCount: clipboardChangeCount)
         }
-        deliveries[identifier] = Delivery(appearance: headsUpDisplay.stoppedAppearance, task: task, streaming: streaming)
-        latestDelivery = task
+        deliveries[identifier] = Delivery(appearance: headsUpDisplay.stoppedAppearance, task: task, streaming: streaming,
+                                          lifecycle: lifecycle, target: target, clipboardChangeCount: clipboardChangeCount)
+        latestDelivery = lifecycle
+        lifecycle.armDeadline(after: DeliveryLifecycle.transcriptionTimeout) { [weak self] in
+            self?.deliveryTimedOut(identifier)
+        }
         updatePhase()
         updateHeadsUpDisplay()
     }
@@ -463,20 +465,24 @@ import os
     /// Delivers the transcript of `delivery` into the target captured when it was recorded. After every suspension it
     /// checks that the delivery was not cancelled, so a cancelled dictation never inserts.
     private func deliver(_ rawText: String, audioSeconds: Double, target: InsertionTarget?, delivery: UUID,
-                         recovery: DictationMiss? = nil, clipboardChangeCount: Int? = nil) async {
+                         recovery: DictationMiss? = nil, clipboardChangeCount: Int) async {
         guard !rawText.isEmpty else {
-            finishDelivery(delivery, message: "No speech was recognized.")
+            finishDelivery(delivery, outcome: .refused("No speech was recognized."))
             return
         }
         let prepared = pipeline.prepare(rawText, bundleIdentifier: target?.bundleIdentifier)
         guard deliveries[delivery] != nil, !Task.isCancelled else { return }
         guard prepared.profile.producesText else {
-            finishDelivery(delivery, message: "Dictation is turned off in \(target?.applicationName ?? "this application").")
+            finishDelivery(delivery, outcome: .refused("Dictation is turned off in \(target?.applicationName ?? "this application")."))
             return
         }
         let text = prepared.finalText
+        guard !text.isEmpty else {
+            finishDelivery(delivery, outcome: .refused("No text remained after text processing."))
+            return
+        }
         if target?.wasSecure == true {
-            showMiss(text, reason: .secureField, onClipboard: false, delivery: delivery)
+            showMiss(text, reason: .secureField, clipboard: .preserve, delivery: delivery)
             return
         }
         // History and transcript files are written after insertion, and never for text a password field refused.
@@ -489,60 +495,81 @@ import os
             if let target, target.focusedElement.map({
                 Accessibility.describe($0, processIdentifier: target.processIdentifier).isSecure
             }) == true {
-                showMiss(text, reason: .secureField, onClipboard: false, delivery: delivery)
+                showMiss(text, reason: .secureField, clipboard: .preserve, delivery: delivery)
                 return
             }
             lastTranscript = text
-            if let clipboardChangeCount { TextInserter.placeOnClipboardIfUnchanged(text, since: clipboardChangeCount) }
-            let copied = NSPasteboard.general.string(forType: .string) == text
-            showMiss(text, reason: copied ? recovery : .clipboardChanged, onClipboard: false, delivery: delivery)
+            showMiss(text, reason: recovery, clipboard: .writeIfUnchanged(changeCount: clipboardChangeCount), delivery: delivery)
             if recovery != .microphoneDisconnected { await record() }
             return
         }
         guard let target else {
             lastTranscript = text
-            showMiss(text, reason: .noTextField, onClipboard: true, delivery: delivery)
+            showMiss(text, reason: .noTextField, clipboard: .writeIfUnchanged(changeCount: clipboardChangeCount), delivery: delivery)
             await record()
             return
         }
-        let outcome = await TextInserter.insert(text, into: target, onLanded: { [weak self] in self?.deliveryLanded(delivery) })
+        let outcome = await TextInserter.insert(text, into: target, clipboardChangeCount: clipboardChangeCount, onLanded: { [weak self] in self?.deliveryLanded(delivery) })
         guard deliveries[delivery] != nil else { return }
         // Finish the dictation first, then write history: the write is the last suspension and touches no session state.
         switch outcome {
         case .inserted(let method):
-            dictationLog.notice("inserted into \(target.applicationName) by \(method.rawValue) with profile \(prepared.profile.rawValue)")
-            finishDelivery(delivery, message: nil)
+            finishDelivery(delivery, outcome: .inserted(application: target.applicationName, method: method, profile: prepared.profile.rawValue))
         case .refusedSecureField:
-            showMiss(text, reason: .secureField, onClipboard: false, delivery: delivery)
+            showMiss(text, reason: .secureField, clipboard: .preserve, delivery: delivery)
         case .noEditableFocus:
-            showMiss(text, reason: .noTextField, onClipboard: true, delivery: delivery)
+            showMiss(text, reason: .noTextField, clipboard: .writeIfUnchanged(changeCount: clipboardChangeCount), delivery: delivery)
         case .targetChanged:
-            showMiss(text, reason: .focusMoved, onClipboard: true, delivery: delivery)
+            showMiss(text, reason: .focusMoved, clipboard: .writeIfUnchanged(changeCount: clipboardChangeCount), delivery: delivery)
         case .unconfirmed(let clipboard):
-            if case .writeIfUnchanged(let changeCount) = clipboard {
-                TextInserter.placeOnClipboardIfUnchanged(text, since: changeCount)
-            }
-            showMiss(text, reason: NSPasteboard.general.string(forType: .string) == text ? .unconfirmed : .clipboardChanged, onClipboard: false, delivery: delivery)
+            showMiss(text, reason: .unconfirmed, clipboard: clipboard, delivery: delivery)
         case .cancelled:
+            finishDelivery(delivery, outcome: .refused("Dictation was cancelled."))
             return
         }
         switch outcome {
         case .refusedSecureField, .cancelled:
             break
         case .inserted, .noEditableFocus, .targetChanged, .unconfirmed:
-            // Kept until the next dictation so it can be pasted again.
+            // A short or empty recording must not erase the last usable transcript.
             lastTranscript = text
             await record()
         }
     }
 
-    private func showMiss(_ text: String, reason: DictationMiss, onClipboard: Bool, delivery: UUID) {
-        if onClipboard { TextInserter.placeOnClipboard(text) }
-        let changeCount = reason != .secureField && NSPasteboard.general.string(forType: .string) == text ? NSPasteboard.general.changeCount : nil
-        let appearance = deliveries[delivery]?.appearance
-        finishDelivery(delivery, message: nil)
-        headsUpDisplay.showPark(reason: reason, appearance: appearance, clipboardChangeCount: changeCount,
+    private func showMiss(_ text: String, reason: DictationMiss, clipboard: ClipboardFallback, delivery: UUID) {
+        guard let pending = deliveries[delivery] else { return }
+        let recovery = DictationClipboardRecovery.prepare(text, reason: reason, clipboard: clipboard,
+                                                          stoppedChangeCount: pending.clipboardChangeCount)
+        // Freeze the visible frame before finishing delivery can redraw the ordinary stop animation.
+        headsUpDisplay.showPark(reason: recovery.reason, appearance: pending.appearance, clipboardChangeCount: recovery.changeCount,
                                 pasteShortcut: settings.configuration.repasteChord?.displayName)
+        finishDelivery(delivery, outcome: recovery.reason == .secureField
+                       ? .refused(recovery.reason.completionMessage) : .parked(recovery.reason))
+    }
+
+    private func deliveryTimedOut(_ identifier: UUID) {
+        guard let delivery = deliveries[identifier] else { return }
+        if let result = delivery.result {
+            let prepared = pipeline.prepare(result.text, bundleIdentifier: delivery.target?.bundleIdentifier)
+            if delivery.target?.wasSecure == true || delivery.target?.focusedElement.map({
+                Accessibility.describe($0, processIdentifier: delivery.target!.processIdentifier).isSecure
+            }) == true {
+                showMiss("", reason: .secureField, clipboard: .preserve, delivery: identifier)
+            } else if !prepared.profile.producesText {
+                finishDelivery(identifier, outcome: .refused("Dictation is turned off in \(delivery.target?.applicationName ?? "this application")."))
+            } else if prepared.finalText.isEmpty {
+                finishDelivery(identifier, outcome: .refused("No speech was recognized."))
+            } else {
+                lastTranscript = prepared.finalText
+                showMiss(prepared.finalText, reason: .deliveryTimedOut,
+                         clipboard: .writeIfUnchanged(changeCount: delivery.clipboardChangeCount), delivery: identifier)
+            }
+        } else {
+            showMiss("", reason: .transcriptionTimedOut, clipboard: .preserve, delivery: identifier)
+        }
+        delivery.task.cancel()
+        delivery.streaming.cancel()
     }
 
     /// Text delivery does not shorten the indicator's smoke or disturb a newer recording.
@@ -575,10 +602,9 @@ import os
         updatePhase()
     }
 
-    private func finishDelivery(_ delivery: UUID, message: String?) {
-        if let message { dictationLog.notice("completed: \(message)") }
-        lastMessage = message
-        deliveries[delivery] = nil
+    private func finishDelivery(_ delivery: UUID, outcome: DeliveryLifecycle.Outcome) {
+        guard let pending = deliveries.removeValue(forKey: delivery), pending.lifecycle.finish(outcome) else { return }
+        lastMessage = outcome.message
         if deliveries.isEmpty { latestDelivery = nil }
         updatePhase()
         // A newer recording keeps its listening display.
@@ -606,10 +632,9 @@ import os
         guard !deliveries.isEmpty else { return }
         dictationLog.notice("cancelled during transcription")
         // Removing a delivery first guarantees that a transcription finishing later cannot insert anything.
-        let cancelled = deliveries.values
-        deliveries.removeAll()
-        latestDelivery = nil
-        for delivery in cancelled {
+        let cancelled = deliveries
+        for (identifier, delivery) in cancelled {
+            finishDelivery(identifier, outcome: .refused("Dictation was cancelled."))
             delivery.task.cancel()
             delivery.streaming.cancel()
         }

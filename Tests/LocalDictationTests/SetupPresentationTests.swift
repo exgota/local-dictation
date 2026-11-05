@@ -113,3 +113,44 @@ final class SetupPresentationTests: XCTestCase {
         view.subviews.flatMap { [$0] + descendants(of: $0) }
     }
 }
+
+final class GuidedSetupCopyTests: XCTestCase {
+    @MainActor func testHeadlinesStayFixedWhilePermissionAndDownloadStatusChanges() {
+        var presentation = SetupPresentation()
+        XCTAssertEqual(presentation.headline, "First, let it hear you.")
+        presentation.microphoneDenied = true
+        XCTAssertEqual(presentation.headline, "First, let it hear you.")
+        XCTAssertEqual(presentation.detail, "Turn on Local Dictation in System Settings.")
+        presentation.microphoneGranted = true
+        XCTAssertEqual(presentation.headline, "Next, let it type for you.")
+        presentation.waitingForAccessibility = true
+        XCTAssertEqual(presentation.detail, "Switch on Local Dictation, then come back.")
+        presentation.accessibilityGranted = true
+        for state: ModelController.State in [.installing(.downloading, fraction: 0.25), .installing(.compiling, fraction: 1), .loading, .failed("Offline")] {
+            presentation.model = state
+            XCTAssertEqual(presentation.headline, "Last, the speech model.")
+        }
+        XCTAssertEqual(presentation.detail, "The download stopped.")
+        presentation.model = .loading
+        XCTAssertEqual(presentation.detail, "Almost ready…")
+        presentation.model = .installing(.downloading, fraction: 1)
+        XCTAssertEqual(presentation.detail, "100% of 1.2 GB")
+    }
+
+    @MainActor func testTryItUsesConfiguredTriggerAndKeepsListeningAndSuccessInSecondaryLine() {
+        var presentation = SetupPresentation(microphoneGranted: true, accessibilityGranted: true, model: .ready)
+        XCTAssertEqual(presentation.headline, "Now press fn and talk.")
+        XCTAssertEqual(presentation.detail, "Press fn again to stop.")
+        presentation.listening = true
+        XCTAssertEqual(presentation.headline, "Now press fn and talk.")
+        XCTAssertEqual(presentation.detail, "Listening…")
+        presentation.listening = false
+        presentation.hasText = true
+        XCTAssertEqual(presentation.detail, "That's it.")
+        presentation.trigger = .rightOption
+        presentation.triggerMode = .hold
+        presentation.hasText = false
+        XCTAssertEqual(presentation.headline, "Now hold Right Option and talk.")
+        XCTAssertEqual(presentation.detail, "Let go to stop.")
+    }
+}

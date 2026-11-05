@@ -15,8 +15,10 @@ struct SetupPresentation {
     var trigger: TriggerKey = .function
     var triggerMode: TriggerMode = .toggle
     var listening = false
-    var installationWarning: String?
+    var hasText = false
     var retainedDownloadProgress = 0.0
+    /// True for a moment after the last byte arrives, so "100%" is seen before "Almost ready…".
+    var showsCompletedDownload = false
 
     var step: Step {
         if !microphoneGranted { return .microphone }
@@ -55,28 +57,33 @@ struct SetupPresentation {
 
     var headline: String {
         switch step {
-        case .microphone: return microphoneDenied ? "Microphone access is off" : "Local Dictation needs your microphone"
-        case .accessibility: return "Let Local Dictation type for you"
-        case .download: return downloadFailed ? "The download stopped" : "Getting the speech model"
+        case .microphone: return "First, let it hear you."
+        case .accessibility: return "Next, let it type for you."
+        case .download: return "Last, the speech model."
         case .tryIt:
-            return triggerMode == .toggle ? "Press \(trigger.displayName) and say something" : "Hold \(trigger.displayName) and say something"
+            return triggerMode == .toggle ? "Now press \(trigger.displayName) and talk." : "Now hold \(trigger.displayName) and talk."
         }
     }
 
     var detail: String {
         switch step {
-        case .microphone: return microphoneDenied ? "Turn it on in System Settings." : ""
+        case .microphone: return microphoneDenied ? "Turn on Local Dictation in System Settings." : ""
         case .accessibility:
-            return waitingForAccessibility ? "Turn on Local Dictation, then come back." : "Turn it on in Accessibility settings."
+            return waitingForAccessibility ? "Switch on Local Dictation, then come back." : ""
         case .download:
             let bytes = ModelManifest.totalSize + VoiceActivityModelManifest.totalSize
             let size = (Double(bytes) / 1_000_000_000).formatted(.number.precision(.fractionLength(1))) + " GB"
-            if downloadFailed { return "It picks up where it left off." }
-            if preparingModel { return "Preparing for this Mac…" }
-            return "\(Int(progress * 100))% of \(size)"
+            if downloadFailed { return "The download stopped." }
+            if showsCompletedDownload, preparingModel { return "100% of \(size)" }
+            if preparingModel { return "Almost ready…" }
+            let fraction: Double
+            if case .installing(_, let completed) = model { fraction = max(0, min(1, completed)) }
+            else { fraction = progress }
+            return "\(Int(fraction * 100))% of \(size)"
         case .tryIt:
             if listening { return "Listening…" }
-            return triggerMode == .toggle ? "Press \(trigger.displayName) again when you’re done." : "Release \(trigger.displayName) when you’re done."
+            if hasText { return "That's it." }
+            return triggerMode == .toggle ? "Press \(trigger.displayName) again to stop." : "Let go to stop."
         }
     }
 }
@@ -91,7 +98,8 @@ struct OnboardingView: View {
     @State private var waitingForAccessibility = false
     @State private var text = ""
     @State private var retainedDownloadProgress = 0.0
-    private let installationWarning: String?
+    @State private var showsCompletedDownload = false
+    @State private var downloadFinished = false
 
     init(context: SettingsContext, bringForward: @escaping @MainActor () -> Void, finish: @escaping () -> Void) {
         self.bringForward = bringForward
@@ -100,14 +108,6 @@ struct OnboardingView: View {
         model = context.model
         settings = context.settings
         controller = context.controller
-        let installation = InstallationCheck.current()
-        if installation.isQuarantined || installation.isTranslocated {
-            installationWarning = "Move to Applications, then reopen."
-        } else if installation.signingIdentityChanged {
-            installationWarning = "This build may need permissions again."
-        } else {
-            installationWarning = nil
-        }
     }
 
     private var presentation: SetupPresentation {
@@ -115,8 +115,8 @@ struct OnboardingView: View {
             microphoneGranted: permissions.microphoneGranted, microphoneDenied: permissions.microphoneDenied,
             accessibilityGranted: permissions.accessibilityGranted, waitingForAccessibility: waitingForAccessibility,
             model: model.state, trigger: settings.configuration.trigger, triggerMode: settings.configuration.triggerMode,
-            listening: controller.phase == .recording, installationWarning: installationWarning,
-            retainedDownloadProgress: retainedDownloadProgress)
+            listening: controller.phase == .recording, hasText: !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            retainedDownloadProgress: retainedDownloadProgress, showsCompletedDownload: showsCompletedDownload)
     }
 
     var body: some View {
@@ -127,6 +127,13 @@ struct OnboardingView: View {
             .onChange(of: model.state, initial: true) { _, state in
                 if case .installing(_, let fraction) = state { retainedDownloadProgress = max(0, min(0.99, fraction)) }
                 if state == .loading { retainedDownloadProgress = 0.99 }
+                // Hold the finished percentage briefly when the bytes are in, then show "Almost ready…".
+                if case .installing(.downloading, _) = state { downloadFinished = false }
+                if case .installing(.compiling, _) = state, !downloadFinished {
+                    downloadFinished = true
+                    showsCompletedDownload = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { showsCompletedDownload = false }
+                }
             }
             .onChange(of: permissions.accessibilityGranted) { _, granted in
                 if granted { waitingForAccessibility = false; bringForward() }
@@ -166,9 +173,6 @@ struct SetupContentView: View {
                 .frame(width: 240, height: 240)
                 .padding(.top, 8)
             VStack(spacing: 6) {
-                if let warning = presentation.installationWarning {
-                    Text(warning).foregroundStyle(.secondary).lineLimit(1)
-                }
                 Text(presentation.headline).font(.title3.weight(.semibold))
                 Text(presentation.detail).foregroundStyle(.secondary).monospacedDigit()
                     .opacity(presentation.detail.isEmpty ? 0 : 1)
@@ -208,7 +212,9 @@ struct SetupContentView: View {
                     .padding(.horizontal, 10).padding(.vertical, 6)
                     .background(RoundedRectangle(cornerRadius: 7).fill(Color(nsColor: .textBackgroundColor)))
                     .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color(nsColor: .separatorColor)))
-                Button("Done", action: action).controlSize(.large).keyboardShortcut(.defaultAction)
+                if presentation.hasText {
+                    Button("Done", action: action).controlSize(.large).keyboardShortcut(.defaultAction)
+                }
             }
         }
     }

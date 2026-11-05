@@ -4,7 +4,7 @@ import DictationCore
 extension TriggerKey {
     var displayName: String {
         switch self {
-        case .function: return "Fn"
+        case .function: return "fn"
         case .rightOption: return "Right Option"
         case .rightCommand: return "Right Command"
         case .key(let chord): return chord.displayName

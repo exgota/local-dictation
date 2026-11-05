@@ -8,6 +8,29 @@ public enum DictationMiss: String, CaseIterable, Sendable, Codable {
     case secureField
     case modelUnavailable
     case microphoneDisconnected
+    case deliveryTimedOut
+    case transcriptionTimedOut
+
+    public var completionMessage: String {
+        switch self {
+        case .focusMoved: return "Focus moved before the text was inserted."
+        case .noTextField: return "No text field had focus."
+        case .unconfirmed: return "Text insertion could not be confirmed."
+        case .clipboardChanged: return "The clipboard changed before the text could be copied."
+        case .secureField: return "Dictation was refused in a secure field."
+        case .modelUnavailable: return "The speech model recovered; the text is available to paste."
+        case .microphoneDisconnected: return "The microphone disconnected before recording finished."
+        case .deliveryTimedOut: return "Text delivery timed out; check the target before using Paste last text."
+        case .transcriptionTimedOut: return "Transcription timed out; no text was recovered."
+        }
+    }
+
+    public var showsCopyMark: Bool {
+        switch self {
+        case .focusMoved, .noTextField, .unconfirmed, .modelUnavailable, .microphoneDisconnected: true
+        case .clipboardChanged, .secureField, .deliveryTimedOut, .transcriptionTimedOut: false
+        }
+    }
 
     public var holdDuration: Double {
         switch self {
@@ -28,13 +51,14 @@ public enum DictationMiss: String, CaseIterable, Sendable, Codable {
         case .secureField: return "That is a password field. Nothing was typed, copied, or kept."
         case .modelUnavailable: return "The speech model recovered. Your dictation is copied. Press Command V to paste."
         case .microphoneDisconnected: return "The microphone disconnected. What it heard is copied. Press Command V to paste."
+        case .deliveryTimedOut: return "Text delivery timed out. It may already be inserted. Check before using Paste last text."
+        case .transcriptionTimedOut: return "Transcription timed out. No text was recovered."
         }
     }
 }
 
 /// Timing for the parked moon. Transcription completion, hovering, and explicit paste are separate events.
 public struct MoonParkAnimation: Sendable {
-    public static let arrivalDuration = 0.5
     public enum Departure: Sendable { case timeout, pasted }
     public let reason: DictationMiss
     public private(set) var beganAt: Double
@@ -67,6 +91,7 @@ public struct MoonParkAnimation: Sendable {
 
     public func isFinished(at time: Double, reduceMotion: Bool) -> Bool {
         guard let age = departureAge(at: time) else { return false }
-        return age > (reduceMotion ? 0.15 : 0.52)
+        if reason == .secureField { return age > (reduceMotion ? 0.15 : 0.52) }
+        return age >= (reason.showsCopyMark ? MoonAnimation.parkReturnDuration : 0) + MoonAnimation.smokeDuration
     }
 }

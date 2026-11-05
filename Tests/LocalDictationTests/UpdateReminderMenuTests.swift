@@ -5,17 +5,17 @@ import XCTest
 final class UpdateReminderMenuTests: XCTestCase {
     @MainActor func testUpdateCommandIsAbsentWithoutPendingUpdate() {
         let menu = NSMenu()
-        for header in StatusMenu.HeaderState.allCases {
-            StatusMenu.populate(menu, state: .init(header: header), target: nil)
+        for recording in [false, true] {
+            StatusMenu.populate(menu, state: .init(recording: recording), target: nil)
             XCTAssertNil(menu.item(withTitle: "Install update…"))
         }
     }
 
-    @MainActor func testPendingUpdateStartsSecondCommandGroupInEveryHeaderState() throws {
+    @MainActor func testPendingUpdateStartsSecondCommandGroupWhileIdleOrRecording() throws {
         let menu = NSMenu()
         let target = NSObject()
-        for header in StatusMenu.HeaderState.allCases {
-            StatusMenu.populate(menu, state: .init(header: header, hasPendingUpdate: true), target: target)
+        for recording in [false, true] {
+            StatusMenu.populate(menu, state: .init(recording: recording, hasPendingUpdate: true), target: target)
             let update = try XCTUnwrap(menu.item(withTitle: "Install update…"))
             let index = menu.index(of: update)
             XCTAssertTrue(menu.item(at: index - 1)?.isSeparatorItem == true)
@@ -24,7 +24,7 @@ final class UpdateReminderMenuTests: XCTestCase {
             XCTAssertTrue(update.target === target)
             XCTAssertTrue(update.isEnabled)
             XCTAssertEqual(update.keyEquivalent, "")
-            XCTAssertEqual(menu.items.first?.view?.frame.height, 32)
+            XCTAssertNil(menu.items.first?.view)
         }
     }
 

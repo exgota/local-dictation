@@ -35,23 +35,30 @@ final class MoonRenderingTests: XCTestCase {
     }
 }
 
-final class MoonParkRenderingTests: XCTestCase {
-    @MainActor func testReducedMotionKeepsDotsStationaryAndOnlyChangesOpacity() throws {
+final class MoonSetupMotionTests: XCTestCase {
+    @MainActor func testSetupFloatIsEnabledByDefaultAndReduceMotionRemovesIt() throws {
         let renderer = try MoonRenderer()
-        var target = MoonFrame()
-        target.time = 1.7
-        let main = try renderer.render(target, pixels: 112)
-        let satellite = try renderer.render(target, pixels: MoonPark.satellitePixels(for: 112))
-        let motion = MoonPark(source: main, main: main, satellite: satellite, smokeFraction: 230 / 450)
-        let arriving = motion.render(age: 0.075, reason: .focusMoved, reduceMotion: true)
-        let resting = motion.render(age: 1.2, reason: .focusMoved, reduceMotion: true)
-        XCTAssertEqual(arriving.bitmap.bytes, resting.bitmap.bytes)
-        XCTAssertEqual(arriving.opacity, 0.5, accuracy: 0.000001)
-        XCTAssertEqual(resting.opacity, 1)
-        let departing = motion.render(age: 1.3, reason: .focusMoved, departure: .pasted, departureAge: 0.075, reduceMotion: true)
-        XCTAssertEqual(departing.bitmap.bytes, resting.bitmap.bytes)
-        XCTAssertEqual(departing.opacity, 0.5, accuracy: 0.000001)
-        let secure = motion.render(age: 1.2, reason: .secureField, reduceMotion: true)
-        XCTAssertLessThan(secure.bitmap.bytes.filter { $0 == 255 }.count, resting.bitmap.bytes.filter { $0 == 255 }.count)
+        for shape: Float in [0, 1, 2] {
+            var frame = MoonFrame()
+            frame.mode = 2
+            frame.previousShape = shape
+            frame.nextShape = shape
+            frame.transition = 1
+            frame.download = 0.52
+            frame.time = 1.5
+            let floating = try renderer.render(frame, pixels: 240)
+            frame.reduceMotion = true
+            XCTAssertNotEqual(try renderer.render(frame, pixels: 240).bytes, floating.bytes)
+        }
+    }
+
+    @MainActor func testVoiceLevelStillChangesTheFormingMoon() throws {
+        let renderer = try MoonRenderer()
+        var frame = MoonFrame()
+        frame.formation = 0.86
+        let quiet = try renderer.render(frame, pixels: 112)
+        frame.level = 0.9
+        let speaking = try renderer.render(frame, pixels: 112)
+        XCTAssertNotEqual(quiet.bytes, speaking.bytes)
     }
 }

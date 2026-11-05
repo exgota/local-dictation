@@ -91,7 +91,9 @@ public struct ModelStore: Sendable {
         var completed: Int64 = 0
 
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 60
+        // An idle timeout: a slow download that keeps moving is unaffected, and a lost connection is reported in
+        // about 15 seconds instead of minutes.
+        configuration.timeoutIntervalForRequest = 15
         configuration.timeoutIntervalForResource = 60 * 60
         configuration.waitsForConnectivity = false
         let session = URLSession(configuration: configuration)
@@ -206,7 +208,7 @@ public struct ModelStore: Sendable {
         let manager = FileManager.default
         try manager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         let resumeURL = destination.appendingPathExtension("resume")
-        let observer = DownloadProgressObserver(received: received)
+        let transfer = ModelDownloadTransfer(received: received)
         let temporary: URL
         let response: URLResponse
         do {
@@ -214,9 +216,9 @@ public struct ModelStore: Sendable {
                 // The resume file is removed first, so a resume that the server refuses starts over on the next
                 // attempt.
                 try? manager.removeItem(at: resumeURL)
-                (temporary, response) = try await session.download(resumeFrom: resumeData, delegate: observer)
+                (temporary, response) = try await transfer.download(session: session, remoteURL: remoteURL, resumeData: resumeData)
             } else {
-                (temporary, response) = try await session.download(from: remoteURL, delegate: observer)
+                (temporary, response) = try await transfer.download(session: session, remoteURL: remoteURL, resumeData: nil)
             }
         } catch {
             if let resumeData = (error as? URLError)?.downloadTaskResumeData { try? resumeData.write(to: resumeURL) }
@@ -241,28 +243,23 @@ public struct ModelStore: Sendable {
                 throw ModelInstallationError.cancelled
             } catch {
                 lastError = error
-                if attempt + 1 < attempts {
-                    try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 2_000_000_000)
-                }
+                guard attempt + 1 < attempts, shouldRetry(after: error) else { break }
+                try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 2_000_000_000)
             }
         }
         throw lastError!
     }
-}
 
-private final class DownloadProgressObserver: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-    let received: @Sendable (Int64) -> Void
-
-    init(received: @escaping @Sendable (Int64) -> Void) {
-        self.received = received
+    /// No connection is not retried: retrying would keep the percentage frozen while setup still looks busy, and
+    /// Try Again resumes from the files already downloaded.
+    static func shouldRetry(after error: Error) -> Bool {
+        guard let error = error as? URLError else { return true }
+        switch error.code {
+        case .timedOut, .notConnectedToInternet, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed,
+             .internationalRoamingOff, .dataNotAllowed:
+            return false
+        default:
+            return true
+        }
     }
-
-    func urlSession(
-        _ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
-        totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64
-    ) {
-        received(totalBytesWritten)
-    }
-
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {}
 }

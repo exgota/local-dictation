@@ -35,7 +35,7 @@ let package = Package(
                            .product(name: "Sparkle", package: "Sparkle")],
             linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
         .testTarget(name: "LocalDictationTests", dependencies: ["LocalDictation"]),
-        .testTarget(name: "MoonRenderingTests", dependencies: ["MoonRendering", "DictationCore"]),
+        .testTarget(name: "MoonRenderingTests", dependencies: ["MoonRendering", "DictationCore"], resources: [.copy("Fixtures")]),
         .testTarget(name: "DictationCoreTests", dependencies: ["DictationCore"]),
         .testTarget(name: "TextProcessingTests", dependencies: ["TextProcessing"]),
         .testTarget(name: "TranscriptHistoryTests", dependencies: ["TranscriptHistory"]),

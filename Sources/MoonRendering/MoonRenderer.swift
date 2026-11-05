@@ -10,6 +10,8 @@ public struct MoonFrame: Sendable {
     public var level: Float = 0
     public var shake: Float = 0
     public var warning: Float = 0
+    public var park: Float = 0
+    var parkSourceWeight: Float = 0
     public var formation: Float = 1
     public var transition: Float = 0
     public var ditherRate: Float = 0
@@ -18,12 +20,13 @@ public struct MoonFrame: Sendable {
     public var mode: Float = 1
     public var previousShape: Float = 0
     public var nextShape: Float = 0
+    public var reduceMotion = false
 
     public init() {}
 
     func values(width: Int, height: Int) -> [Float] {
         [Float(width), Float(height), time, level, shake, warning, formation, transition,
-         ditherRate, loading, download, mode, previousShape, nextShape, 0.96, 0.96, 0.95]
+         ditherRate, loading, download, mode, previousShape, nextShape, 0.96, 0.96, 0.95, reduceMotion ? 1 : 0, park]
     }
 }
 
@@ -108,7 +111,7 @@ public enum MoonRenderingError: Error {
         return texture
     }
 
-    public func draw(_ frame: MoonFrame, into texture: MTLTexture) throws {
+    public func draw(_ frame: MoonFrame, into texture: MTLTexture, parkSource: MoonParkSource? = nil) throws {
         guard let command = queue.makeCommandBuffer() else { throw MoonRenderingError.unavailable }
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = texture
@@ -116,11 +119,25 @@ public enum MoonRenderingError: Error {
         pass.colorAttachments[0].storeAction = .store
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
         guard let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { throw MoonRenderingError.unavailable }
-        let values = frame.values(width: texture.width, height: texture.height)
+        let values = frame.values(width: texture.width, height: texture.height) + [parkSource == nil ? 0 : 1, frame.parkSourceWeight]
         encoder.setRenderPipelineState(pipeline)
         values.withUnsafeBytes { encoder.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0) }
         encoder.setFragmentTexture(legend, index: 0)
         encoder.setFragmentTexture(surface, index: 1)
+        if let parkSource {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rg32Float,
+                width: parkSource.pixels, height: parkSource.pixels, mipmapped: false)
+            descriptor.storageMode = .shared
+            descriptor.usage = .shaderRead
+            guard let captured = device.makeTexture(descriptor: descriptor) else { throw MoonRenderingError.unavailable }
+            parkSource.values.withUnsafeBytes {
+                captured.replace(region: MTLRegionMake2D(0, 0, parkSource.pixels, parkSource.pixels), mipmapLevel: 0,
+                    withBytes: $0.baseAddress!, bytesPerRow: parkSource.pixels * 2 * MemoryLayout<Float>.stride)
+            }
+            encoder.setFragmentTexture(captured, index: 2)
+        } else {
+            encoder.setFragmentTexture(legend, index: 2)
+        }
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
         command.commit()
@@ -131,9 +148,9 @@ public enum MoonRenderingError: Error {
         submittedFrames += 1
     }
 
-    public func render(_ frame: MoonFrame, pixels: Int) throws -> MoonBitmap {
+    public func render(_ frame: MoonFrame, pixels: Int, parkSource: MoonParkSource? = nil) throws -> MoonBitmap {
         let texture = try makeTexture(pixels: pixels)
-        try draw(frame, into: texture)
+        try draw(frame, into: texture, parkSource: parkSource)
         return bitmap(from: texture)
     }
 

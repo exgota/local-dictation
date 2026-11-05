@@ -60,13 +60,15 @@ final class InterfacePersistenceTests: XCTestCase {
         let menu = NSMenu()
         StatusMenu.populate(menu, state: .init(recording: true, canPaste: true, keepsHistory: true, paused: true, opensAtLogin: true), target: nil)
         XCTAssertEqual(menu.items.map { $0.isSeparatorItem ? "separator" : String($0.title.split(separator: "\t", omittingEmptySubsequences: false)[0]) }, [
-            "", "separator", "Stop dictation", "Paste last text", "Show history", "Resume all shortcuts", "separator", "Open at login", "Settings…", "Quit Local Dictation",
+            "Stop dictation", "Paste last text", "Show history", "Resume all shortcuts", "separator", "Open at login", "Settings…", "Quit Local Dictation",
         ])
-        XCTAssertEqual(menu.items[7].state, .on)
-        XCTAssertEqual(menu.items[8].keyEquivalent, ",")
-        XCTAssertEqual(menu.items[9].keyEquivalent, "q")
-        XCTAssertTrue(menu.items[2].attributedTitle?.string.hasSuffix("\tfn") == true)
-        XCTAssertTrue(menu.items[3].attributedTitle?.string.hasSuffix("\t⌥⇧V") == true)
+        XCTAssertEqual(menu.items[5].state, .on)
+        XCTAssertEqual(menu.items[6].keyEquivalent, ",")
+        XCTAssertEqual(menu.items[7].keyEquivalent, "q")
+        XCTAssertEqual(menu.items[0].keyEquivalent, "")
+        XCTAssertNil(menu.items[0].attributedTitle)
+        XCTAssertEqual(menu.items[1].keyEquivalent, "v")
+        XCTAssertEqual(menu.items[1].keyEquivalentModifierMask, [.option, .shift])
         StatusMenu.populate(menu, state: .init(), target: nil)
         XCTAssertFalse(menu.items.contains { $0.title == "Show history" })
         XCTAssertFalse(menu.items.first {  $0.title.hasPrefix("Paste last text") }!.isEnabled)

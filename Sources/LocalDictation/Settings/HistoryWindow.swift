@@ -15,9 +15,8 @@ import TranscriptHistory
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     func show() {
         if window?.isVisible != true { window?.center() }
-        NSApp.activate()
         showWindow(nil)
-        window?.makeKeyAndOrderFront(nil)
+        if let window { ApplicationPresence.shared.bringToFront(window) }
     }
 }
 

@@ -6,6 +6,8 @@ public enum PasteOutcome: Equatable, Sendable {
     case landed
     /// The transcript could not be written, so no paste shortcut was posted.
     case writeFailed
+    /// A newer clipboard was found before the write. No paste shortcut was posted.
+    case clipboardChanged
     /// No process read the clipboard within `readTimeout`. The transcript is left on the clipboard as plain text,
     /// unless another process wrote to the clipboard in the meantime.
     case notRead
@@ -66,9 +68,14 @@ public enum PasteOutcome: Equatable, Sendable {
     /// now shows the transcript; it returns false where the target cannot be read, and the restore then waits the full
     /// `restoreDelay`.
     public func paste(
-        _ text: String, postPasteShortcut: () -> Void, onLanded: () -> Void = {}, showsText: () -> Bool = { false }
+        _ text: String, expectedChangeCount: Int? = nil, postPasteShortcut: () -> Void,
+        onLanded: () -> Void = {}, showsText: () -> Bool = { false }
     ) async -> PasteOutcome {
+        let expectedChangeCount = expectedChangeCount ?? pasteboard.changeCount
+        guard pasteboard.changeCount == expectedChangeCount else { return .clipboardChanged }
         let snapshot = pasteboard.takeSnapshot()
+        // Snapshotting promised data can block while another application copies. Never overwrite that copy.
+        guard pasteboard.changeCount == expectedChangeCount else { return .clipboardChanged }
         var firstRead: TimeInterval?
         let write = pasteboard.writeOnDemand(text) { [clock] in
             if firstRead == nil { firstRead = clock() }
@@ -98,7 +105,7 @@ public enum PasteOutcome: Equatable, Sendable {
             switch outcome {
             case .landed: pasteboard.restore(snapshot)
             case .notRead: pasteboard.writePlainText(text)
-            case .writeFailed: break
+            case .writeFailed, .clipboardChanged: break
             }
         }
         return outcome

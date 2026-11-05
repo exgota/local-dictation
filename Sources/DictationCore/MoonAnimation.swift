@@ -1,15 +1,19 @@
 import Foundation
 
-/// Timing for listening, transcribing, and the stop animation.
+/// Timing for listening, transcribing, Park, and the stop animation.
 public struct MoonAnimation: Sendable {
-    public enum State: Sendable { case hidden, listening, silentMicrophone, transcribing, smoke, fading }
+    public enum State: Sendable { case hidden, listening, silentMicrophone, transcribing, smoke, fading, parked, returning }
     public static let smokeDuration = 0.450
-    public static let refusalDuration = 0.240
+    public static let markTimeConstant = 0.075
+    public static let parkEntryDuration = 0.250
+    public static let parkReturnDuration = 0.200
     public static let setupTransitionDuration = 0.950
     public private(set) var state: State = .hidden
     public private(set) var beganAt: Double = 0
     public private(set) var level: Double = 0
     public private(set) var warning: Double = 0
+    public private(set) var park: Double = 0
+    private var initialPark: Double = 0
     private var energy: Double = 0
     private var previousFrame: Double?
 
@@ -21,7 +25,7 @@ public struct MoonAnimation: Sendable {
 
     public mutating func listen(at time: Double) {
         if state == .listening { return }
-        if state == .hidden { level = 0; energy = 0; warning = 0; previousFrame = nil }
+        if state == .hidden { park = 0; level = 0; energy = 0; warning = 0; previousFrame = nil }
         state = .listening
         beganAt = time
     }
@@ -56,23 +60,42 @@ public struct MoonAnimation: Sendable {
         beganAt = time
     }
 
+    /// Park retains the current level and starts from the mark weight already on screen.
+    public mutating func showPark(at time: Double, weight: Double = 0) {
+        initialPark = weight
+        park = weight
+        state = .parked
+        beganAt = time
+    }
+
+    public mutating func releasePark(at time: Double) {
+        guard state == .parked else { return }
+        advance(to: time)
+        initialPark = park
+        state = .returning
+        beganAt = time
+    }
+
     public mutating func advance(to time: Double) {
+        // Park has a finite ease-in-out; the approved warning keeps its exponential response.
+        if state == .parked || state == .returning {
+            let target = state == .parked ? 1.0 : 0.0
+            let duration = state == .parked ? Self.parkEntryDuration : Self.parkReturnDuration
+            let fraction = min(1, max(0, (time - beganAt) / duration))
+            let progress = fraction * fraction * (3 - 2 * fraction)
+            park = initialPark + (target - initialPark) * progress
+        }
         let elapsed = min(0.05, max(0, previousFrame.map { time - $0 } ?? 0.016))
         previousFrame = time
         if state == .listening || state == .silentMicrophone {
             let target = state == .listening ? energy : 0
             level += (target - level) * (1 - exp(-elapsed / (target > level ? 0.025 : 0.040)))
             let targetWarning: Double = state == .silentMicrophone ? 1 : 0
-            warning += (targetWarning - warning) * (1 - exp(-elapsed / 0.075))
+            warning += (targetWarning - warning) * (1 - exp(-elapsed / Self.markTimeConstant))
         }
         if (state == .smoke && time >= beganAt + Self.smokeDuration) || (state == .fading && time >= beganAt + 0.120) {
             state = .hidden
         }
-    }
-
-    public static func refusalShake(after seconds: Double) -> Double {
-        let fraction = min(1, max(0, seconds) / refusalDuration)
-        return fraction < 1 ? 0.09 * sin(fraction * .pi * 4) * (1 - fraction) : 0
     }
 
     public static func smokeOpacity(after seconds: Double) -> Double {

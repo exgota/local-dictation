@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Combine
 import DictationCore
 import DictationEngine
@@ -15,11 +16,9 @@ import SwiftUI
     private lazy var context = SettingsContext(settings: settings, permissions: permissions, model: model, controller: controller)
     private lazy var settingsWindow = SettingsWindowController(context: context, showHistory: { [weak self] in self?.showHistory() })
     private lazy var historyWindow = HistoryWindowController(pipeline: controller.pipeline)
-    private var loginItemError: String?
     private let onboarding = OnboardingWindowController()
     private var statusItem: NSStatusItem!
     private let menu = NSMenu()
-    private var menuHeader: MenuMoonHeaderView?
     private var menuIsOpen = false
     private var subscriptions: Set<AnyCancellable> = []
     /// Keeps App Nap from delaying hotkey handling. Idle system sleep stays allowed; plain `.userInitiated` would
@@ -30,6 +29,10 @@ import SwiftUI
     private var hasPendingUpdate = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // The main menu exists before any window, including the Move alert, so the menu bar works in every window.
+        ApplicationPresence.installMainMenu(showSettings: #selector(showSettings), target: self)
+        // Diagnostics and command requests exit before this point, so they never relocate the app.
+        if ApplicationRelocation.relaunchIfNeeded() { exit(0) }
         // Complete library loading, pipeline creation and the warm-up draw before any moon window can appear.
         if case .failure(let error) = MoonRenderer.shared {
             dictationLog.error("Moon renderer could not start: \(error.localizedDescription)")
@@ -43,6 +46,13 @@ import SwiftUI
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
         controller.onRequiresAttention = { [weak self] in self?.showOnboarding() }
+        // Switching the microphone on in System Settings after a denial reaches only a new process. macOS offers
+        // Quit & Reopen for that; if the person chooses Later and comes back, the app reopens itself then.
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                if self?.permissions.microphoneAllowedInNewProcess == true { ApplicationRelocation.relaunchCurrentApplication() }
+            }
+        }
         Publishers.Merge4(
             controller.$phase.map { _ in () }, controller.$isPaused.map { _ in () },
             permissions.objectWillChange.map { _ in () }, model.$state.map { _ in () }
@@ -61,6 +71,7 @@ import SwiftUI
         }
 
         if iconState.opensSetup { showOnboarding() }
+        ApplicationPresence.shared.returnToMenuBarWithoutWindows()
         InstallationCheck.current().recordLaunch()
         // Source builds remain usable before the release signing key is configured.
         if let publicKey = Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String,
@@ -90,7 +101,7 @@ import SwiftUI
     private func updateIcon() {
         let state = iconState
         statusItem.button?.image = state.image
-        if menuIsOpen { menuHeader?.update(title: statusHeader.title, subtitle: statusDetail, phase: statusHeader.moonPhase) }
+        statusItem.button?.toolTip = controller.secureInput.holder?.statusDetail ?? "Local Dictation"
     }
 
     /// Setup errors open setup; secure input and ordinary states open the menu.
@@ -124,6 +135,7 @@ import SwiftUI
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if ApplicationPresence.reopeningItself { return false }
         needsSetup ? showOnboarding() : showSettings()
         return true
     }
@@ -132,37 +144,12 @@ import SwiftUI
     func menuDidClose(_ menu: NSMenu) { menuIsOpen = false }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        menuHeader = StatusMenu.populate(menu, state: StatusMenu.State(
-            header: statusHeader, detail: statusDetail, recording: controller.phase == .recording,
-            trigger: settings.configuration.trigger, pasteChord: settings.configuration.repasteChord,
+        StatusMenu.populate(menu, state: StatusMenu.State(
+            recording: controller.phase == .recording, pasteChord: settings.configuration.repasteChord,
+            pauseChord: settings.configuration.pauseChord,
             canPaste: controller.lastTranscript != nil, keepsHistory: settings.configuration.keepsHistory,
             paused: controller.isPaused, opensAtLogin: SMAppService.mainApp.status == .enabled,
             hasPendingUpdate: hasPendingUpdate), target: self)
-    }
-
-    private var statusDetail: String {
-        if let holder = controller.secureInput.holder { return holder.statusDetail }
-        if let loginItemError { return loginItemError }
-        if !permissions.accessibilityGranted { return "Accessibility access is off" }
-        if !permissions.microphoneGranted { return "Microphone access is off" }
-        let health = controller.eventTap.health
-        if !health.isInstalled || !health.isEnabled { return "Shortcuts are unavailable" }
-        switch model.state {
-        case .notInstalled: return "Speech model is not downloaded"
-        case .failed: return "Speech model is unavailable"
-        default: return ""
-        }
-    }
-
-    private var statusHeader: StatusMenu.HeaderState {
-        if controller.secureInput.holder != nil { return .blocked }
-        if controller.isPaused { return .paused }
-        switch controller.phase {
-        case .recording: return .listening
-        case .transcribing: return .transcribing
-        case .idle: break
-        }
-        return model.isReady ? .ready : .loading
     }
 
     var supportsGentleScheduledUpdateReminders: Bool { true }
@@ -212,8 +199,7 @@ import SwiftUI
         do {
             if SMAppService.mainApp.status == .enabled { try SMAppService.mainApp.unregister() }
             else { try SMAppService.mainApp.register() }
-            loginItemError = nil
-        } catch { loginItemError = "Open at login could not be changed" }
+        } catch { dictationLog.error("Open at login could not be changed: \(error.localizedDescription)") }
     }
 
     private func showOnboarding() {
@@ -223,6 +209,32 @@ import SwiftUI
 
 let commandLineArguments = Array(CommandLine.arguments.dropFirst()).filter { !$0.hasPrefix("-psn_") }
 #if DEBUG || MOON_DIAGNOSTICS
+if ["--render-menu", "--render-move-alert", "--render-download"].contains(commandLineArguments.first ?? ""), commandLineArguments.count == 2 {
+    MainActor.assumeIsolated {
+        do {
+            let directory = URL(fileURLWithPath: commandLineArguments[1])
+            switch commandLineArguments[0] {
+            case "--render-menu": try InterfaceDiagnostics.renderMenu(directory: directory)
+            case "--render-move-alert": try InterfaceDiagnostics.renderMoveAlert(directory: directory)
+            default: try SetupDiagnostics.renderDownload(directory: directory)
+            }
+        } catch { print("Interface render failed: \(error)"); exit(1) }
+    }
+    exit(0)
+}
+if ["--render-setup-shadow", "--render-pill-entrance", "--render-park-release", "--render-park-miss", "--render-park-warning"].contains(commandLineArguments.first ?? ""), commandLineArguments.count == 2 {
+    MainActor.assumeIsolated {
+        do {
+            let directory = URL(fileURLWithPath: commandLineArguments[1])
+            if commandLineArguments[0] == "--render-setup-shadow" { try MotionDiagnostics.renderShadow(directory: directory) }
+            else if commandLineArguments[0] == "--render-park-miss" { try MotionDiagnostics.renderParkMiss(directory: directory) }
+            else if commandLineArguments[0] == "--render-park-warning" { try MotionDiagnostics.renderParkWarning(directory: directory) }
+            else if commandLineArguments[0] == "--render-park-release" { try MotionDiagnostics.renderParkRelease(directory: directory) }
+            else { try MotionDiagnostics.renderEntrance(directory: directory) }
+        } catch { print("Motion render failed: \(error)"); exit(1) }
+    }
+    exit(0)
+}
 if commandLineArguments.first == "--render-setup", commandLineArguments.count == 2 {
     MainActor.assumeIsolated {
         do { try SetupDiagnostics.render(directory: URL(fileURLWithPath: commandLineArguments[1])) }
@@ -239,8 +251,23 @@ if commandLineArguments == ["--measure-moon-startup"] {
 }
 if commandLineArguments.first == "--render-park-parity", commandLineArguments.count == 3 {
     MainActor.assumeIsolated {
-        do { try MoonDiagnostics.renderPark(states: URL(fileURLWithPath: commandLineArguments[1]), directory: URL(fileURLWithPath: commandLineArguments[2])) }
+        do {
+            try MoonDiagnostics.renderPark(states: URL(fileURLWithPath: commandLineArguments[1]), directory: URL(fileURLWithPath: commandLineArguments[2]))
+        }
         catch { print("Park render failed: \(error)"); exit(1) }
+    }
+    exit(0)
+}
+if commandLineArguments.first == "--render-park-sequence", commandLineArguments.count == 3 {
+    MainActor.assumeIsolated {
+        do {
+            _ = NSApplication.shared
+            NSApp.setActivationPolicy(.prohibited)
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+            let display = HeadsUpDisplayController()
+            try MoonDiagnostics.renderPark(states: URL(fileURLWithPath: commandLineArguments[1]),
+                directory: URL(fileURLWithPath: commandLineArguments[2]), composite: display.captureCoin)
+        } catch { print("Park sequence render failed: \(error)"); exit(1) }
     }
     exit(0)
 }
@@ -276,6 +303,11 @@ if commandLineArguments.first == "--generate-application-icon", commandLineArgum
     exit(0)
 }
 #endif
+// A fresh process reads the current microphone permission; the running app's answer stays cached after a denial.
+if commandLineArguments == [PermissionMonitor.microphoneAuthorizationArgument] {
+    print(AVCaptureDevice.authorizationStatus(for: .audio) == .authorized ? "authorized" : "not authorized")
+    exit(0)
+}
 if let first = commandLineArguments.first, first.hasPrefix("--") {
     Task { @MainActor in exit(await CommandLineInterface.run(commandLineArguments)) }
     dispatchMain()

@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import CoreGraphics
 import IOKit
 
 /// Polls once a second for Secure Event Input. While another application holds it, event taps receive no key events,
@@ -50,18 +51,33 @@ import IOKit
         return String(decoding: buffer.prefix(Int(length)), as: UTF8.self)
     }
 
-    /// The process with secure input enabled, from the console user entry the window server publishes in the I/O Registry.
+    /// Prefer this graphics session; the registry fallback must use the root, not the IOService plane entry.
     nonisolated private static func secureInputProcessIdentifier() -> pid_t? {
-        let root = IORegistryEntryFromPath(kIOMainPortDefault, "IOService:/")
+        let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+        if let processIdentifier = processIdentifier(in: session) { return processIdentifier }
+        let root = IORegistryGetRootEntry(kIOMainPortDefault)
         guard root != 0 else { return nil }
         defer { IOObjectRelease(root) }
-        guard
-            let users = IORegistryEntryCreateCFProperty(root, "IOConsoleUsers" as CFString, kCFAllocatorDefault, 0)?
-                .takeRetainedValue() as? [[String: Any]]
-        else { return nil }
-        for user in users {
-            if let pid = user["kCGSSessionSecureInputPID"] as? NSNumber { return pid.int32Value }
+        let users = IORegistryEntryCreateCFProperty(root, "IOConsoleUsers" as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue() as? [[String: Any]] ?? []
+        return secureInputProcessIdentifier(currentSession: session, consoleUsers: users, userIdentifier: getuid())
+    }
+
+    nonisolated static func secureInputProcessIdentifier(currentSession: [String: Any]?, consoleUsers: [[String: Any]],
+                                                         userIdentifier: uid_t) -> pid_t? {
+        if let processIdentifier = processIdentifier(in: currentSession) { return processIdentifier }
+        for user in consoleUsers where (user["kCGSSessionOnConsoleKey"] as? NSNumber)?.boolValue == true
+            && (user["kCGSSessionUserIDKey"] as? NSNumber)?.uint64Value == UInt64(userIdentifier) {
+            if let processIdentifier = processIdentifier(in: user) { return processIdentifier }
         }
         return nil
+    }
+
+    nonisolated private static func processIdentifier(in session: [String: Any]?) -> pid_t? {
+        guard let number = session?["kCGSSessionSecureInputPID"] as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              let identifier = pid_t(exactly: number.int64Value), identifier > 0,
+              number.doubleValue == Double(identifier) else { return nil }
+        return identifier
     }
 }

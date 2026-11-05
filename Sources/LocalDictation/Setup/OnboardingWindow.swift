@@ -22,32 +22,35 @@ import SwiftUI
             window.isReleasedWhenClosed = false
             window.animationBehavior = .none
             window.backgroundColor = .windowBackgroundColor
-            window.center()
+            // The setup moon is light dots on a dark field. In Light appearance it was white on white and invisible.
+            window.appearance = NSAppearance(named: .darkAqua)
             self.window = window
         }
         bringForward()
     }
 
-    /// The app has no Dock icon, so a window it leaves behind others is hard to find. Called after each step that
-    /// takes the user elsewhere.
+    /// Called after each step that takes the user elsewhere, such as System Settings.
     func bringForward() {
         guard let window else { return }
         if window.isVisible {
-            NSApp.activate()
-            window.makeKeyAndOrderFront(nil)
+            ApplicationPresence.shared.bringToFront(window)
             return
         }
         window.layoutIfNeeded()
         guard let content = window.contentView else { return }
         content.layoutSubtreeIfNeeded()
+        // The hosting controller sizes the window only after it is shown, so size it here, then center it.
+        if let size = window.contentViewController?.view.fittingSize, size.width > 0, size.height > 0 {
+            window.setContentSize(size)
+        }
+        window.center()
         // Setup is also the repair path, so it opens even when the moon cannot be drawn.
         let moonIsReady = Self.prepareMoon(in: content)
         window.displayIfNeeded()
         CATransaction.flush()
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || !moonIsReady
         window.alphaValue = reduceMotion ? 1 : 0
-        NSApp.activate()
-        window.makeKeyAndOrderFront(nil)
+        ApplicationPresence.shared.bringToFront(window)
         if !reduceMotion {
             NSAnimationContext.runAnimationGroup { animation in
                 animation.duration = 0.22

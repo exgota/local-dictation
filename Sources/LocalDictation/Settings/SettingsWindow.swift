@@ -27,9 +27,8 @@ import SwiftUI
             let frame = NSScreen.screenWithMouse().visibleFrame
             window.setFrameOrigin(NSPoint(x: frame.midX - window.frame.width / 2, y: frame.maxY - window.frame.height - 120))
         }
-        NSApp.activate()
         showWindow(nil)
-        window?.makeKeyAndOrderFront(nil)
+        if let window { ApplicationPresence.shared.bringToFront(window) }
     }
 }
 
