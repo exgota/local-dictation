@@ -27,21 +27,21 @@ Setup then walks through four steps, one at a time:
 1. **Microphone**, so it can hear you.
 2. **Accessibility**, so it can notice the Fn key and type into other apps.
 3. **The speech model**, a one-time download of about 1.2 GB from
-   [Hugging Face](https://huggingface.co/ConwayResearch/Underdog-Bark-3.0-Pro). If the download stops, choose Try
-   Again.
+   [Hugging Face](https://huggingface.co/ConwayResearch/Underdog-Bark-3.0-Pro). The download takes the percentage to
+   80%. Then "Preparing for this Mac" takes it the rest of the way, which takes about a minute. "Ready, 100%" means you
+   can start dictating. If the download stops, choose Try Again.
 4. **Try it.** Press Fn, say something, and press Fn again. Your words appear in the setup window.
 
 ![Setup downloading the speech model](docs/screenshots/setup-dark.png)
 
 After setup the app lives in the menu bar as a waveform. Click it to start dictation, paste your last dictation, open
-history, pause the shortcuts or open Settings. The menu starts with Start dictation and has no state line. Paste last
-text shows its configured shortcut, normally ⌥⇧V, using the native menu key equivalent.
+history, pause the shortcuts or open Settings. Paste last text has a shortcut too, Option-Shift-V (⌥⇧V) by default.
 
 ## Updates
 
-From 1.1, the app checks GitHub for new versions on its own. When one is ready, you see an update alert, or an Install
-update… item in the menu if the alert would have interrupted you. Nothing installs until you choose Install Update.
-Versions before 1.1 cannot check, so install 1.1 by hand once.
+The app checks GitHub for new versions on its own. When one is ready, you see an update alert, or an Install update…
+item in the menu if the alert would have interrupted you. Nothing installs until you choose Install Update. Versions
+before 1.1 cannot check, so install the latest version by hand once.
 
 ## How it works
 
@@ -49,12 +49,12 @@ Versions before 1.1 cannot check, so install 1.1 by hand once.
 - **You can start right after launch.** After setup, if the speech model is still loading when you press Fn, the app
   records anyway and types your words once the model is ready. If the model fails to load, or is still not ready two
   minutes after you start recording, a sound plays and the recording stays in memory until the model recovers, you
-  cancel it or you quit. After you stop, a pending transcription has at most two more minutes to finish; a timeout
-  ends that delivery with a logged reason. Recovered text is parked as described below.
+  cancel it or you quit.
 - **The text is typed where you were working,** and your clipboard is put back the way it was.
-- **When it cannot type,** because focus moved or there is no text field, a small moon parks beside the big one and the
-  text goes on the clipboard: press ⌘V. If the dictation is no longer on your clipboard, use Paste last text from the
-  menu. If the app could not confirm the text was typed, check before pasting, because it may already be there.
+- **When it cannot type,** because focus moved or there is no text field, the moon folds into a copy icon and the text
+  goes on the clipboard: press ⌘V. The icon rises away after 5 seconds, or sooner if you paste. Your text stays on the
+  clipboard until you copy something else. To get your last dictation back later, choose Paste last text from the menu.
+  If the app could not confirm the text was typed, check before pasting, because it may already be there.
 - **Cleanup depends on the app.** Most apps get the words as recognized. Slack, Discord, Telegram, WhatsApp and Messages
   get light cleanup: "um" and similar fillers go, "comma" and "new line" become punctuation, sentences are capitalized,
   and "scratch that" deletes the last sentence of the current dictation. Turn on Remove fillers and format text in
@@ -63,10 +63,12 @@ Versions before 1.1 cannot check, so install 1.1 by hand once.
 - **Corrections** are your own replacement rules for words it keeps getting wrong, for example "cloud code" to Claude
   Code. Turn on Apply corrections and choose Edit Corrections….
 - **History and text files** are optional and off by default. History shows your dictations with Copy and Add
-  Correction. Text files are saved as Markdown, by default to `~/Desktop/Transcripts/<date>/`.
+  Correction. Text files go in the Transcripts folder on your Desktop by default, in a folder for each day, as Markdown,
+  a plain-text format.
 - **The microphone is on only while you dictate.**
 - **A lock on the menu bar icon** means another app, such as a password manager or Terminal's Secure Keyboard Entry, is
-  holding secure input, so Fn cannot reach Local Dictation. Hover over the icon to see which app holds it, when known.
+  protecting what you type, so Local Dictation cannot notice Fn. Hold the pointer over the icon to see which app it is,
+  when the app can tell.
 
 ![Settings](docs/screenshots/settings-dark.png)
 
@@ -80,8 +82,9 @@ little to wait for when you stop. [docs/SPEC.md](docs/SPEC.md) has the measureme
 
 Local Dictation recognizes speech on your Mac and does not upload your audio or text. The app does not save recordings.
 Transcripts are saved only if you turn on history (kept in `~/Library/Application Support/LocalDictation/`) or text
-files. Clearing history does not delete text files. Your last usable dictation stays in memory until another usable transcript replaces it or until you
-quit, so you can paste it again. Once text is typed or pasted into another app, that app decides what happens to it.
+files. Clearing history does not delete text files. Your last dictation stays in memory until a newer one with words
+replaces it or you quit, so you can paste it again. Once text is typed or pasted into another app, that app decides what
+happens to it.
 
 The app goes online only to download the speech and voice activity models from Hugging Face, and to check GitHub for
 updates and download them.
