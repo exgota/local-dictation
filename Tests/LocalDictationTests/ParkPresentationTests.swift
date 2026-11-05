@@ -21,9 +21,9 @@ import XCTest
         let stopped = try makeSource()
         let motion = try HeadsUpDisplayController.parkMotion(displayed: stopped, opacity: 1, visible: false, stopped: stopped, shader: sourceFrame())
         XCTAssertEqual(try motion.render(age: 0, reason: .focusMoved).opacity, 0)
-        let middle = try motion.render(age: 0.125, reason: .focusMoved)
+        let middle = try motion.render(age: MoonAnimation.parkEntryDuration / 2, reason: .focusMoved)
         XCTAssertEqual(middle.opacity, 0.5, accuracy: 0.000001)
-        XCTAssertNotEqual(middle.bitmap.bytes, try motion.render(age: 0.25, reason: .focusMoved).bitmap.bytes)
+        XCTAssertNotEqual(middle.bitmap.bytes, try motion.render(age: MoonAnimation.parkEntryDuration, reason: .focusMoved).bitmap.bytes)
     }
 
     func testMatchingCommandPasteReleasesButNewerClipboardDoesNot() throws {
@@ -34,8 +34,8 @@ import XCTest
         XCTAssertEqual(try XCTUnwrap(display.parkFrame(at: 1.2, hovered: false, reduceMotion: false)).opacity, 1)
         display.observePaste(clipboardChangeCount: 42, at: 1.5)
         XCTAssertEqual(try XCTUnwrap(display.parkFrame(at: 1.56, hovered: false, reduceMotion: false)).opacity, 1, accuracy: 0.000001)
-        XCTAssertLessThan(try XCTUnwrap(display.parkFrame(at: 2.14, hovered: false, reduceMotion: false)).opacity, 0.1)
-        XCTAssertNil(display.parkFrame(at: 2.16, hovered: false, reduceMotion: false))
+        XCTAssertLessThan(try XCTUnwrap(display.parkFrame(at: 1.94, hovered: false, reduceMotion: false)).opacity, 0.1)
+        XCTAssertNil(display.parkFrame(at: 1.96, hovered: false, reduceMotion: false))
         XCTAssertFalse(display.isParked)
     }
 
@@ -51,13 +51,13 @@ import XCTest
         XCTAssertLessThan(try XCTUnwrap(display.parkFrame(at: 20.74, hovered: true, reduceMotion: false)).opacity, 0.1)
     }
 
-    func testTimeoutKeepsExistingDeadlineAndSecureRefusalDoesNotShowCopy() throws {
+    func testCopyIconLeavesAfterFiveSecondsAndSecureRefusalDoesNotShowCopy() throws {
         let display = HeadsUpDisplayController(observesPasteEvents: false)
         let source = try makeSource()
         display.beginPark(motion: try MoonPark(source: source, shader: sourceFrame()), reason: .focusMoved, clipboardChangeCount: 42)
         _ = display.parkFrame(at: 0, hovered: false, reduceMotion: false)
-        XCTAssertEqual(try XCTUnwrap(display.parkFrame(at: 2.22, hovered: false, reduceMotion: false)).opacity, 1)
-        XCTAssertLessThan(try XCTUnwrap(display.parkFrame(at: 2.86, hovered: false, reduceMotion: false)).opacity, 0.1)
+        XCTAssertEqual(try XCTUnwrap(display.parkFrame(at: 4.99, hovered: false, reduceMotion: false)).opacity, 1)
+        XCTAssertLessThan(try XCTUnwrap(display.parkFrame(at: 5.44, hovered: false, reduceMotion: false)).opacity, 0.1)
         display.beginPark(motion: try MoonPark(source: source, shader: sourceFrame()), reason: .secureField, clipboardChangeCount: nil)
         _ = display.parkFrame(at: 3, hovered: false, reduceMotion: false)
         display.releasePark(at: 3.05)
@@ -80,9 +80,9 @@ import XCTest
         let first = try XCTUnwrap(display.parkFrame(at: 10, hovered: false, reduceMotion: false))
         XCTAssertEqual(first.shader.park, 0)
         XCTAssertEqual(first.bitmap.bytes, source.bytes)
-        let middle = try XCTUnwrap(display.parkFrame(at: 10.125, hovered: false, reduceMotion: false))
+        let middle = try XCTUnwrap(display.parkFrame(at: 10 + MoonAnimation.parkEntryDuration / 2, hovered: false, reduceMotion: false))
         XCTAssertEqual(middle.shader.park, 0.5, accuracy: 0.000001)
-        let final = try XCTUnwrap(display.parkFrame(at: 10.25, hovered: false, reduceMotion: false))
+        let final = try XCTUnwrap(display.parkFrame(at: 10 + MoonAnimation.parkEntryDuration, hovered: false, reduceMotion: false))
         XCTAssertEqual(final.shader.park, 1)
         XCTAssertNotNil(display.parkFrame(at: 12.21, hovered: false, reduceMotion: false))
     }
@@ -101,9 +101,10 @@ import XCTest
                 event.setIntegerValueField(.eventSourceUserData, value: marker)
                 event.setIntegerValueField(.keyboardEventAutorepeat, value: marker == 12345 ? 1 : 0)
                 display.observePaste(try XCTUnwrap(NSEvent(cgEvent: event)), clipboardChangeCount: 42, at: 11)
-                let returning = try XCTUnwrap(display.parkFrame(at: 11.1, hovered: false, reduceMotion: false))
-                XCTAssertEqual(returning.shader.park, 0.5, accuracy: 0.000001)
-                XCTAssertNil(display.parkFrame(at: 11.66, hovered: false, reduceMotion: false))
+                // The folded copy icon itself rises away; it does not turn back into the moon first.
+                let leaving = try XCTUnwrap(display.parkFrame(at: 11.1, hovered: false, reduceMotion: false))
+                XCTAssertEqual(leaving.shader.park, 1)
+                XCTAssertNil(display.parkFrame(at: 11.46, hovered: false, reduceMotion: false))
             }
         }
     }

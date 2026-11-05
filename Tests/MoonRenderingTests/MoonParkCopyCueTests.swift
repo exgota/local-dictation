@@ -89,9 +89,8 @@ final class MoonParkCopyCueTests: XCTestCase {
         let entry = try motion.render(age: 1.0 / 60, reason: .focusMoved)
         XCTAssertTrue(occupancy(entry.bitmap).isSubset(of: occupancy(source).union(occupancy(copy))))
         XCTAssertEqual(try motion.render(age: 1.5, reason: .focusMoved).bitmap.bytes, copy.bytes)
-        let returned = try motion.render(age: 1.7, reason: .focusMoved, departureAge: 0.2)
-        target.park = 0
-        XCTAssertEqual(returned.bitmap.bytes, try MoonRenderer.shared.get().render(target, pixels: 112).bytes)
+        let leaving = try motion.render(age: 1.7, reason: .focusMoved, departureAge: 0.2)
+        XCTAssertEqual(leaving.bitmap.bytes, MoonSmoke(bitmap: copy).render(fraction: 0.2 / MoonAnimation.smokeDuration).bytes)
     }
 
     @MainActor func testSecureRefusalFadesTheFrozenMoonWithoutCopy() throws {
@@ -126,25 +125,45 @@ final class MoonParkCopyCueTests: XCTestCase {
         XCTAssertNotEqual(try renderer.render(frame, pixels: 112).bytes, middle.bytes)
     }
 
-    @MainActor func testReleaseReturnsToTheSameMoonThenUsesTheSuccessfulStopExit() throws {
+    @MainActor func testReleaseSendsTheDisplayedShapeUpAsSmokeWithoutReturningToTheMoon() throws {
         let shader = sourceFrame()
         let source = try MoonRenderer.shared.get().render(shader, pixels: 112)
         let motion = try MoonPark(source: source, shader: shader)
-        for departureAt in [0.0, 0.1, 0.25, 1.5] {
-            let initial = try motion.render(age: departureAt, reason: .focusMoved)
-            let releasing = try motion.render(age: departureAt, reason: .focusMoved, departureAge: 0)
-            XCTAssertEqual(releasing.bitmap.bytes, initial.bitmap.bytes)
+        for departureAt in [0.0, 0.1, 0.3, 1.5] {
+            let displayed = try motion.render(age: departureAt, reason: .focusMoved)
             for reduced in [false, true] {
                 for exitAge in [0.0, 0.1, 0.3, 0.45] {
-                    let elapsed = MoonAnimation.parkReturnDuration + exitAge
-                    let result = try motion.render(age: departureAt + elapsed, reason: .focusMoved,
-                                                   departureAge: elapsed, reduceMotion: reduced)
-                    let smoke = MoonSmoke(bitmap: source).render(fraction: exitAge / MoonAnimation.smokeDuration)
+                    let result = try motion.render(age: departureAt + exitAge, reason: .focusMoved,
+                                                   departureAge: exitAge, reduceMotion: reduced)
+                    let shape = reduced && departureAt > 0
+                        ? try motion.render(age: departureAt, reason: .focusMoved, reduceMotion: true).bitmap
+                        : displayed.bitmap
+                    let smoke = MoonSmoke(bitmap: shape).render(fraction: exitAge / MoonAnimation.smokeDuration)
                     XCTAssertEqual(result.bitmap.bytes, smoke.bytes)
                     XCTAssertEqual(result.opacity, MoonAnimation.smokeOpacity(after: exitAge), accuracy: 0.000001)
                 }
             }
         }
+    }
+
+    @MainActor func testFoldShowsTheFrontPageBeforeTheBackPageAndGrooves() throws {
+        let renderer = try MoonRenderer(capturesTone: true)
+        var frame = sourceFrame()
+        func tone(_ bitmap: MoonBitmap, x: Double, y: Double) -> Int {
+            let column = Int(((x - 28.5) * 1.3 / 44 * 0.5 + 0.5) * 112)
+            let row = Int(((y - 27.5) * 1.3 / 44 * 0.5 + 0.5) * 112)
+            let offset = (row * 112 + column) * 4
+            return Int(bitmap.bytes[offset]) | Int(bitmap.bytes[offset + 1]) << 8 | Int(bitmap.bytes[offset + 2]) << 16
+        }
+        // Halfway through the fold the front page has formed, but no groove is cut and the back page has not arrived.
+        frame.park = 0.55
+        let middle = try renderer.render(frame, pixels: 112)
+        XCTAssertGreaterThan(tone(middle, x: 29, y: 30.5), 0, "No groove yet")
+        XCTAssertEqual(tone(middle, x: 18.5, y: 16), 0, "The back page's far corner has not arrived")
+        frame.park = 1
+        let folded = try renderer.render(frame, pixels: 112)
+        XCTAssertEqual(tone(folded, x: 29, y: 30.5), 0, "The groove is cut")
+        XCTAssertGreaterThan(tone(folded, x: 18.5, y: 16), 0, "The back page has arrived")
     }
 
     @MainActor func testInterruptedStopDoesNotJumpWhenReleasedDuringEntry() throws {

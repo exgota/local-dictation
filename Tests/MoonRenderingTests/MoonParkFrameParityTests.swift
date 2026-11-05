@@ -45,12 +45,12 @@ final class MoonParkFrameParityTests: XCTestCase {
         }
     }
 
-    /// Frozen shader morph and sent-exit frames from the production renderer.
-    /// Covers 1×/2×, every morph frame at 60 fps, hold, early exits and no-copy reasons.
-    @MainActor func testParkMatchesShaderMorphFrameBaseline() throws {
+    /// Frozen shader fold and sent-exit frames from the production renderer, captured when the fold replaced the blend.
+    /// Covers 1×/2×, every fold frame at 60 fps, hold, early exits, every smoke exit frame and no-copy reasons.
+    @MainActor func testParkMatchesShaderFoldFrameBaseline() throws {
         let url = try XCTUnwrap(Bundle.module.url(forResource: "ParkFrameBaseline", withExtension: "json", subdirectory: "Fixtures"))
         let captures = try JSONDecoder().decode([Capture].self, from: Data(contentsOf: url))
-        XCTAssertEqual(captures.count, 2328)
+        XCTAssertEqual(captures.count, 3408)
         let renderer = try MoonRenderer()
         for capture in captures {
             var sourceFrame = MoonFrame()

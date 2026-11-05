@@ -61,7 +61,7 @@ final class MoonAnimationTests: XCTestCase {
         XCTAssertEqual(animation.warning, 1 - exp(-0.04 / 0.075), accuracy: 0.000001)
     }
 
-    func testParkUsesAQuarterSecondEaseInOutAndRetainsLevel() {
+    func testParkFoldsLinearlyOverItsEntryAndRetainsLevel() {
         var animation = MoonAnimation()
         animation.listen(at: 0)
         animation.receive(decibels: -20)
@@ -70,35 +70,22 @@ final class MoonAnimationTests: XCTestCase {
         animation.showPark(at: 1)
         animation.advance(to: 1)
         XCTAssertEqual(animation.park, 0)
-        animation.advance(to: 1 + 1.0 / 60)
-        XCTAssertGreaterThan(animation.park, 0)
-        XCTAssertLessThan(animation.park, 0.02)
-        animation.advance(to: 1.125)
+        animation.advance(to: 1 + MoonAnimation.parkEntryDuration / 2)
         XCTAssertEqual(animation.park, 0.5, accuracy: 0.000001)
-        animation.advance(to: 1.25)
+        animation.advance(to: 1 + MoonAnimation.parkEntryDuration)
         XCTAssertEqual(animation.park, 1)
-        XCTAssertEqual(animation.level, level)
-        animation.releasePark(at: 1.25)
-        animation.advance(to: 1.35)
-        XCTAssertEqual(animation.park, 0.5, accuracy: 0.000001)
-        animation.advance(to: 1.45)
-        XCTAssertEqual(animation.park, 0, accuracy: 0.000001)
+        animation.advance(to: 9)
+        XCTAssertEqual(animation.park, 1)
         XCTAssertEqual(animation.level, level)
     }
 
-    func testParkIsContinuousAcrossEarlyReleaseAndDelayedFrames() {
+    func testParkContinuesFromTheDisplayedWeight() {
         var animation = MoonAnimation()
         animation.showPark(at: 1, weight: 0.4)
-        animation.advance(to: 1.03)
-        let displayed = animation.park
-        animation.releasePark(at: 1.03)
-        XCTAssertEqual(animation.park, displayed)
-        animation.advance(to: 1.13)
-        XCTAssertEqual(animation.park, displayed / 2, accuracy: 0.000001)
-        animation.advance(to: 1.33)
-        XCTAssertEqual(animation.park, 0)
-        animation.releasePark(at: 2)
-        XCTAssertEqual(animation.beganAt, 1.03)
+        animation.advance(to: 1)
+        XCTAssertEqual(animation.park, 0.4)
+        animation.advance(to: 1 + MoonAnimation.parkEntryDuration / 2)
+        XCTAssertEqual(animation.park, 0.7, accuracy: 0.000001)
     }
 
     func testReduceMotionFreezesOnlyTheShaderClock() {

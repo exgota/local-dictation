@@ -32,11 +32,12 @@ public enum DictationMiss: String, CaseIterable, Sendable, Codable {
         }
     }
 
-    public var holdDuration: Double {
+    /// How long Park stays on screen before it leaves by itself, counted from its first frame.
+    public var visibleDuration: Double {
         switch self {
-        case .secureField: 1.05
-        case .clipboardChanged: 2.2
-        default: 1.7
+        case .secureField: 1.57
+        case .clipboardChanged: 2.72
+        default: 5
         }
     }
 
@@ -85,13 +86,13 @@ public struct MoonParkAnimation: Sendable {
 
     public mutating func advance(to time: Double) {
         guard departedAt == nil, hoverBeganAt == nil else { return }
-        let deadline = beganAt + 0.52 + reason.holdDuration + heldDuration
+        let deadline = beganAt + reason.visibleDuration + heldDuration
         if time >= deadline { leave(.timeout, at: deadline) }
     }
 
     public func isFinished(at time: Double, reduceMotion: Bool) -> Bool {
         guard let age = departureAge(at: time) else { return false }
         if reason == .secureField { return age > (reduceMotion ? 0.15 : 0.52) }
-        return age >= (reason.showsCopyMark ? MoonAnimation.parkReturnDuration : 0) + MoonAnimation.smokeDuration
+        return age >= MoonAnimation.smokeDuration
     }
 }

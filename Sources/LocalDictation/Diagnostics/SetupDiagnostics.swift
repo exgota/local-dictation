@@ -19,11 +19,14 @@ import SwiftUI
             ("download_\(percent)", SetupPresentation(microphoneGranted: true, accessibilityGranted: true,
                 model: .installing(.downloading, fraction: Double(percent) / 100)), "")
         } + [
-            ("download_compiling", .init(microphoneGranted: true, accessibilityGranted: true, model: .installing(.compiling, fraction: 1)), ""),
-            ("download_loading", .init(microphoneGranted: true, accessibilityGranted: true, model: .loading), ""),
-            ("download_failed", .init(microphoneGranted: true, accessibilityGranted: true, model: .failed("Fixture"), retainedDownloadProgress: 0.37), ""),
+            ("download_compiling", .init(microphoneGranted: true, accessibilityGranted: true, model: .installing(.compiling, fraction: 1),
+                preparationElapsed: 0), ""),
+            ("download_loading", .init(microphoneGranted: true, accessibilityGranted: true, model: .loading, preparationElapsed: 50), ""),
+            ("download_ready", .init(microphoneGranted: true, accessibilityGranted: true, model: .ready, showsCompletion: true), ""),
+            ("download_failed", .init(microphoneGranted: true, accessibilityGranted: true, model: .failed("Fixture"), retainedProgress: 0.37), ""),
             ("try_it_empty", .init(microphoneGranted: true, accessibilityGranted: true, model: .ready), ""),
             ("try_it_listening", .init(microphoneGranted: true, accessibilityGranted: true, model: .ready, listening: true), ""),
+            ("try_it_transcribing", .init(microphoneGranted: true, accessibilityGranted: true, model: .ready, transcribing: true), ""),
             ("try_it_text", .init(microphoneGranted: true, accessibilityGranted: true, model: .ready, hasText: true), "Hello from Local Dictation."),
             ("try_it_hold_empty", .init(microphoneGranted: true, accessibilityGranted: true, model: .ready, triggerMode: .hold), ""),
             ("try_it_hold_listening", .init(microphoneGranted: true, accessibilityGranted: true, model: .ready, triggerMode: .hold, listening: true), ""),

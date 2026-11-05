@@ -131,10 +131,57 @@ final class GuidedSetupCopyTests: XCTestCase {
             XCTAssertEqual(presentation.headline, "Last, the speech model.")
         }
         XCTAssertEqual(presentation.detail, "The download stopped.")
+        presentation.model = .installing(.downloading, fraction: 0.5)
+        XCTAssertEqual(presentation.detail, "Downloading 1.2 GB, 40%")
         presentation.model = .loading
-        XCTAssertEqual(presentation.detail, "Almost ready…")
+        presentation.preparationElapsed = 0
+        XCTAssertEqual(presentation.detail, "Preparing for this Mac, 80%")
+    }
+
+    @MainActor func testOneBarReachesOneHundredOnlyWhenTheModelIsUsable() {
+        var presentation = SetupPresentation(microphoneGranted: true, accessibilityGranted: true)
         presentation.model = .installing(.downloading, fraction: 1)
-        XCTAssertEqual(presentation.detail, "100% of 1.2 GB")
+        XCTAssertEqual(presentation.overallProgress, SetupPresentation.downloadShare, accuracy: 0.0001)
+        XCTAssertEqual(presentation.detail, "Downloading 1.2 GB, 80%")
+        presentation.model = .installing(.compiling, fraction: 1)
+        // Measured on an M-series Mac mini: about 50 seconds from the last byte to a usable model. A Mac without a
+        // Neural Engine took up to 80 seconds. Neither, nor a much slower Mac, may show 100% before the model is usable.
+        var previous = 0.0
+        for elapsed in stride(from: 0.0, through: 600, by: 5) {
+            presentation.preparationElapsed = elapsed
+            XCTAssertGreaterThanOrEqual(presentation.overallProgress, previous)
+            XCTAssertLessThan(presentation.overallProgress, 0.99)
+            XCTAssertLessThan(presentation.progress, 1)
+            XCTAssertNotEqual(presentation.detail, "Ready, 100%")
+            previous = presentation.overallProgress
+        }
+        presentation.preparationElapsed = 50
+        XCTAssertEqual(presentation.detail, "Preparing for this Mac, 96%")
+        presentation.preparationElapsed = 80
+        XCTAssertEqual(presentation.detail, "Preparing for this Mac, 98%")
+        presentation.model = .ready
+        presentation.showsCompletion = true
+        XCTAssertEqual(presentation.step, .download)
+        XCTAssertEqual(presentation.detail, "Ready, 100%")
+        XCTAssertTrue(presentation.moonReady)
+        presentation.showsCompletion = false
+        XCTAssertEqual(presentation.step, .tryIt)
+        XCTAssertTrue(presentation.moonReady)
+    }
+
+    @MainActor func testProgressNeverMovesBackAfterAFailureAndTryAgain() {
+        var presentation = SetupPresentation(microphoneGranted: true, accessibilityGranted: true)
+        presentation.model = .installing(.downloading, fraction: 0.5)
+        presentation.retainedProgress = presentation.overallProgress
+        presentation.model = .failed("Offline")
+        XCTAssertEqual(presentation.overallProgress, 0.4, accuracy: 0.0001)
+        XCTAssertEqual(presentation.progress, 0.4, accuracy: 0.0001)
+        // Try Again starts the transfer at zero before the resumed bytes are counted.
+        presentation.model = .installing(.downloading, fraction: 0)
+        XCTAssertEqual(presentation.detail, "Downloading 1.2 GB, 40%")
+        presentation.model = .installing(.downloading, fraction: 0.75)
+        XCTAssertEqual(presentation.detail, "Downloading 1.2 GB, 60%")
+        XCTAssertFalse(presentation.moonReady)
     }
 
     @MainActor func testTryItUsesConfiguredTriggerAndKeepsListeningAndSuccessInSecondaryLine() {
@@ -145,8 +192,14 @@ final class GuidedSetupCopyTests: XCTestCase {
         XCTAssertEqual(presentation.headline, "Now press fn and talk.")
         XCTAssertEqual(presentation.detail, "Listening…")
         presentation.listening = false
+        presentation.transcribing = true
+        XCTAssertEqual(presentation.detail, "Writing it down…")
+        presentation.transcribing = false
         presentation.hasText = true
         XCTAssertEqual(presentation.detail, "That's it.")
+        presentation.transcribing = true
+        XCTAssertEqual(presentation.detail, "Writing it down…")
+        presentation.transcribing = false
         presentation.trigger = .rightOption
         presentation.triggerMode = .hold
         presentation.hasText = false

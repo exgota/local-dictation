@@ -382,17 +382,23 @@ The four steps follow live permission and model state:
 2. Accessibility: shape 2, “Next, let it type for you.” and Open System Settings. After the click, the secondary line
    becomes “Switch on Local Dictation, then come back.” The action stays disabled until access is granted or this
    window becomes key again. Permission status refreshes on return and every second.
-3. Download: shape 0, “Last, the speech model.”, and the percentage of the combined pinned speech and voice-activity
-   manifests, formatted in decimal GB to one fractional digit. Download starts automatically once both permissions
-   are granted. The explicit URLSession download task reports arriving bytes at most ten times per second. The
-   percentage reaches 100% when the bytes finish and holds it for one second; the moon stays capped at 99% until compilation and loading finish.
-   Compiling and loading show “Almost ready…”. Failure keeps the headline and shows “The download stopped.” with
-   Try Again. Failures never retry automatically, and the moon keeps its last download progress. The download
+3. Download: shape 0, “Last, the speech model.”, and one percentage for the whole installation, so 100% means the
+   model is ready to use. Download starts automatically once both permissions are granted. The combined pinned speech
+   and voice-activity manifests fill the first 80%, shown as “Downloading 1.2 GB, 37%” with the size in decimal GB to
+   one fractional digit. The explicit URLSession download task reports arriving bytes at most ten times per second.
+   Compiling and loading fill the rest, shown as “Preparing for this Mac, 92%”. Core ML reports no progress there, so
+   that part follows the clock from when the window sees preparation start: 80% + 19% × (1 − e^(−t / 25 s)), which
+   shows 96% after 50 seconds (an M-series Mac with a Neural Engine) and 98% after 80 (a Mac without one) and never
+   reaches 99%. When the model is usable the line shows “Ready, 100%” for one second while the moon plays its
+   completion, then Try it follows. A model that was already usable when setup opened goes straight to Try it. The
+   percentage never moves back, including through a failure and Try Again. Failure keeps the headline and shows “The
+   download stopped.” with Try Again. Failures never retry automatically, and the moon keeps its last progress. The download
    session's idle timeout is 15 seconds, and a timeout or missing connection is not retried, so a lost connection
    shows “The download stopped.” within about 15 seconds.
 4. Try it: the completion ring, “Now press fn and talk.”, “Press fn again to stop.” and a real single-line text field.
    Both lines use the configured trigger's display name, with the Function key written as “fn”. Hold mode uses
-   “Now hold fn and talk.” and “Let go to stop.” During recording the secondary line is “Listening…”. Once text lands,
+   “Now hold fn and talk.” and “Let go to stop.” During recording the secondary line is “Listening…”, and while the recording is transcribed it is “Writing it
+   down…”. Once text lands,
    it becomes “That's it.” and Done appears. The headline stays fixed within each step. The field receives focus on
    entry and on window return. Dictation uses the normal capture, transcription, processing and history path. This
    in-process field uses its native Accessibility selected-text setter, verifies the result and preserves the
@@ -427,14 +433,16 @@ NASA is credited in `Packaging/NOTICE`.
 
 Reduce Motion follows the approved code: the general shader clock freezes at two seconds. Voice-level changes,
 explicit shape transitions and smoke still advance. The transcribing orbit uses the frozen shader clock under Reduce Motion.
-Park uses a 250 ms ease-in-out entry and a 200 ms ease-in-out return with Reduce Motion enabled or disabled. Reduce Motion blends the moon and mark tones before their single Bayer pass, without interpolating shapes.
+Park uses a 550 ms entry with Reduce Motion enabled or disabled, and release sends the displayed shape up as the 450 ms smoke. Reduce Motion blends the moon and mark tones before their single Bayer pass, without interpolating shapes.
 
 ### Park
 
 Every insertion miss freezes the current shader phase, voice level, radius and coin opacity. When text was copied,
-`copyMark` morphs the moon's signed distance into the original document geometry inside `Moon.metal`, alongside the
-struck-microphone warning. Park uses a cubic smoothstep over 250 ms, with no additional shader easing. The approved
-warning keeps its 75 ms exponential response. The mark
+`copyMark` folds the moon's signed distance into the original document geometry inside `Moon.metal`, alongside the
+struck-microphone warning. Park's progress runs linearly over 550 ms and `foldStages` eases three overlapping stages
+from it: the moon settles into the front page (0 to 55%), the back page slides out from behind it (32 to 86%), then
+the grooves draw in (62 to 100%). Each stage is one simple shape, so no frame passes through a blend of the circle and
+the two-page outline. The approved warning keeps its 75 ms exponential response. The mark
 uses the warning's bump normal and `.62 + .36 * lit` material, followed by the same single Bayer pass. There is no
 second image, gathering, shrinking, repositioning, rising, continued smoke, punch, shake, spin or scaling. The panel
 remains at its current position while visible. A hidden coin starts at zero opacity.
@@ -446,20 +454,21 @@ If a miss interrupts already dispersed stop dots, their frozen signed-distance f
 starting surface. They do not move farther along the stop path or snap back to an earlier moon. Consecutive misses
 begin from the displayed shape. The first frame and opacity are preserved exactly, with Park weight zero. The
 presentation clock starts at the first visible canvas draw, after source capture and window preparation, not when
-Park is requested. Hidden preparation cannot consume its duration. At 60 fps, entry spans 15 frame intervals.
+Park is requested. Hidden preparation cannot consume its duration. At 60 fps, entry spans 33 frame intervals.
 The scratchy dots before a normal miss are the shared stop-particle animation, not a Park dither phase or a
 transcribing shimmer: this HUD path leaves `uRate` at zero. Those pre-miss frames remain unchanged.
 
 A Command-V of the current dictation or successful Paste last text releases Park; timeout or Escape uses the same
-release. The weight eases back to zero over exactly 200 ms, then the existing 450 ms successful-dictation smoke and
-coin fade run from the restored moon. Passive AppKit global and local key-down monitors observe Command-V delivered
+release. The fold stops where it is, and the shape on screen, normally the copy icon, rises away in the existing
+450 ms successful-dictation smoke and coin fade. It does not turn back into the moon first. Passive AppKit global and local key-down monitors observe Command-V delivered
 to other applications and this app while Park is displayed. This includes physical and synthetic events, including
 session/targeted events that bypass the HID hotkey tap. Event-source markers and timestamps do not gate release;
 the observer uses the presentation's monotonic clock. Repeated Command-V also releases. Key-up, other modifier combinations and a changed
 clipboard do not release it. Paste last text from the menu and the configured re-paste shortcut share the same
 successful-insertion release path. No observer swallows a paste or reads its text.
-An early release reverses the current weight without jumping. Timeout still starts after 520 ms plus the reason's
-hold duration (1.7 s normally, 2.2 s for a newer clipboard, 1.05 s for secure fields). Hover pauses that deadline.
+An early release sends the partly folded shape up without jumping. Without a paste, Park leaves by itself after its
+visible duration: 5 s normally, 2.72 s for a newer clipboard and 1.57 s for secure fields, counted from its first
+frame. Hover pauses that deadline.
 Reduce Motion blends endpoint tones before dithering, at the same timing; it keeps the existing successful stop exit.
 
 A secure-field refusal keeps its existing 250 ms in-place fade, without a copy mark or retained text. A newer
@@ -510,7 +519,7 @@ uses the production SwiftUI views with temporary settings and synthetic entries,
 services. Its menu image uses the real menu model with AppKit text and separators; it does not capture
 native menu tracking or compositor vibrancy. The latter exercises the same Park renderer as the live coin.
 
-Park has a committed 2,328-frame RGBA-hash and opacity baseline for the shader morph and return to the sent exit.
+Park has a committed 3,408-frame RGBA-hash and opacity baseline for the shader fold and its smoke exit.
 It covers 1×/2×, 60 fps entry and release, delayed misses during stop motion, hold, early departure, secure fields,
 newer clipboard, transcription/delivery timeout and Reduce Motion. A separate 286-frame baseline, captured before
 this change, requires the existing warning and pre-miss stop frames to remain byte-identical. Behavioral tests check
@@ -520,10 +529,10 @@ timeout and paste observation from HID, session and private event sources, inclu
 and both successful insertion methods; unsuccessful recovery leaves Park available.
 `--render-park-sequence STATES.json DIRECTORY` composites frames through the production coin layers at 2× in dark
 mode. `--render-park-warning DIRECTORY` draws the existing microphone warning through `MoonAnimation` and those
-same layers. `--render-park-miss DIRECTORY` and `--render-park-release DIRECTORY` render 241 frames at 60 fps,
-including the unchanged stop frames, the first visible Park frame and its 250 ms bend. The miss uses the automatic
-timeout; the release feeds a constructed Command-V event through the HUD observer at 1.5 s, then captures the
-200 ms return and normal exit. `timing.json` records weight, opacity and frame continuity. These are offscreen
+same layers. `--render-park-miss DIRECTORY` and `--render-park-release DIRECTORY` render 421 frames at 60 fps,
+including the unchanged stop frames, the first visible Park frame and its 550 ms fold. The miss uses the automatic
+5 s timeout; the release feeds a constructed Command-V event through the HUD observer at 1.5 s, then captures the
+copy icon's smoke exit. `timing.json` records weight, opacity and frame continuity. These are offscreen
 samples, not live input or paste checks. They send no key events and do not read or write the system clipboard.
 
 The shader fixes its sine/cosine approximation and the thirty angular stream seeds to avoid backend-dependent grain

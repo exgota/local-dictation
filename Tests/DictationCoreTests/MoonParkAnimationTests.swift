@@ -12,8 +12,8 @@ final class MoonParkAnimationTests: XCTestCase {
         XCTAssertNil(animation.departure)
         animation.leave(.pasted, at: 21)
         XCTAssertEqual(animation.departureAge(at: 21.2)!, 0.2, accuracy: 0.000001)
-        XCTAssertFalse(animation.isFinished(at: 21.5, reduceMotion: false))
-        XCTAssertTrue(animation.isFinished(at: 21.66, reduceMotion: false))
+        XCTAssertFalse(animation.isFinished(at: 21.4, reduceMotion: false))
+        XCTAssertTrue(animation.isFinished(at: 21.46, reduceMotion: false))
     }
 
     func testDelayedFrameDoesNotExtendDeadline() {
@@ -31,11 +31,19 @@ final class MoonParkAnimationTests: XCTestCase {
         XCTAssertEqual(animation.age(at: 2), 0)
     }
 
-    func testReducedMotionKeepsReturnAndSentExitTiming() {
+    func testReducedMotionKeepsTheSentExitTiming() {
         var animation = MoonParkAnimation(reason: .focusMoved, at: 0)
         animation.leave(.timeout, at: 1)
         XCTAssertFalse(animation.isFinished(at: 1.1, reduceMotion: true))
-        XCTAssertTrue(animation.isFinished(at: 1.66, reduceMotion: true))
+        XCTAssertTrue(animation.isFinished(at: 1.46, reduceMotion: true))
+    }
+
+    func testCopyIconStaysFiveSecondsWithoutAPaste() {
+        var animation = MoonParkAnimation(reason: .noTextField, at: 10)
+        animation.advance(to: 14.99)
+        XCTAssertNil(animation.departure)
+        animation.advance(to: 15.01)
+        XCTAssertEqual(animation.departedAt!, 15, accuracy: 0.000001)
     }
 
     func testEveryMissHasAnAnnouncementAndSecureTextIsNotOfferedForPaste() {

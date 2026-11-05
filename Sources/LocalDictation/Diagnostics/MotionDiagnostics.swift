@@ -46,7 +46,8 @@ import MoonRendering
         var previousBitmap = source
         var previousOpacity = 1.0
         var samples: [[String: Any]] = []
-        for index in 0...240 {
+        // Seven seconds: the 5 s automatic timeout from frame 38 and its smoke exit fit inside the sequence.
+        for index in 0...420 {
             let time = Double(index) / 60
             let bitmap: MoonBitmap
             let opacity: Double
@@ -86,13 +87,14 @@ import MoonRendering
             .write(to: directory.appendingPathComponent("timing.json"))
         try """
         Offscreen production coin layers, 56 pt coin in a 96 pt canvas at 2x, 192 x 192 pixels.
-        241 frames at 60 fps. Normal stop starts at frame 30. Park starts at frame 38 from frame 37's exact bitmap.
-        Park entry: 250 ms ease-in-out, frames 38 through 53. Return: 200 ms, then the normal 450 ms smoke exit.
+        421 frames at 60 fps. Normal stop starts at frame 30. Park starts at frame 38 from frame 37's exact bitmap.
+        Park entry: 550 ms fold, frames 38 through 71. Release: the folded shape rises in the normal 450 ms smoke exit.
+        Without a paste, Park leaves by itself 5 s after it starts, at frame 338.
         Command-V: \(pasteFrame.map { "frame \($0), 1.5 s, constructed NSEvent with timestamp 0" } ?? "none; automatic timeout").
         No events are posted. No clipboard, microphone or application services are used.
         These samples verify drawing and release routing, not operating-system event delivery or desktop presentation.
         """.write(to: directory.appendingPathComponent("render.txt"), atomically: true, encoding: .utf8)
-        print("Rendered 241 Park frames; stop at frame 30, miss at frame 38, paste frame \(pasteFrame.map(String.init) ?? "none")")
+        print("Rendered 421 Park frames; stop at frame 30, miss at frame 38, paste frame \(pasteFrame.map(String.init) ?? "none")")
     }
 
     static func renderShadow(directory: URL) throws {

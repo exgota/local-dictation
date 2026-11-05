@@ -1,7 +1,7 @@
 import DictationCore
 import Foundation
 
-/// A shader morph at the stopped moon's radius, level and phase. Only release starts the sent exit.
+/// A shader fold at the stopped moon's radius, level and phase. Release sends the folded shape up as smoke.
 public struct MoonPark: Sendable {
     public struct Frame: Sendable {
         public let bitmap: MoonBitmap
@@ -37,37 +37,31 @@ public struct MoonPark: Sendable {
             let departure = departureAge.map { 1 - Self.smoothstep($0 / 0.12) } ?? 1
             return Frame(bitmap: source, opacity: sourceOpacity * (1 - progress) * departure, shader: shader)
         }
+        // Departure freezes the fold where it was; the shape on screen then rises away as smoke.
         let departureAt = departureAge.map { max(0, age - $0) }
+        let entryAge = departureAt ?? age
         var animation = MoonAnimation()
         animation.showPark(at: 0, weight: Double(shader.park))
-        if let departureAt { animation.releasePark(at: departureAt) }
-        animation.advance(to: age)
+        animation.advance(to: entryAge)
         var frame = shader
         frame.park = reason.showsCopyMark ? Float(animation.park) : 0
         frame.reduceMotion = reduceMotion
         if interruptedSource != nil {
             var entry = MoonAnimation()
             entry.showPark(at: 0, weight: Double(shader.park))
-            entry.advance(to: departureAt ?? age)
-            let residual = 1 - entry.park
-            let remaining = departureAge.map { 1 - Self.smoothstep($0 / MoonAnimation.parkReturnDuration) } ?? 1
-            frame.parkSourceWeight = Float(residual * remaining)
+            entry.advance(to: entryAge)
+            frame.parkSourceWeight = Float(1 - entry.park)
         }
-        let entryAge = departureAt ?? age
         let opacity = reason.showsCopyMark
             ? sourceOpacity + (1 - sourceOpacity) * Self.smoothstep(entryAge / MoonAnimation.parkEntryDuration)
             : sourceOpacity + (1 - sourceOpacity) * Self.smoothstep(entryAge / 0.25)
-        let returnDuration = reason.showsCopyMark ? MoonAnimation.parkReturnDuration : 0
-        if let departureAge, departureAge >= returnDuration {
-            frame.park = 0
-            let moon = reason.showsCopyMark ? try MoonRenderer.shared.get().render(frame, pixels: source.width) : source
-            let exitAge = departureAge - returnDuration
-            return Frame(bitmap: MoonSmoke(bitmap: moon).render(fraction: exitAge / MoonAnimation.smokeDuration),
-                         opacity: opacity * MoonAnimation.smokeOpacity(after: exitAge), shader: frame)
-        }
-        let bitmap = age <= 0 || !reason.showsCopyMark ? source
+        let shape = entryAge <= 0 || !reason.showsCopyMark ? source
             : try MoonRenderer.shared.get().render(frame, pixels: source.width, parkSource: interruptedSource)
-        return Frame(bitmap: bitmap, opacity: opacity, shader: frame)
+        if let departureAge {
+            return Frame(bitmap: MoonSmoke(bitmap: shape).render(fraction: departureAge / MoonAnimation.smokeDuration),
+                         opacity: opacity * MoonAnimation.smokeOpacity(after: departureAge), shader: frame)
+        }
+        return Frame(bitmap: shape, opacity: opacity, shader: frame)
     }
 
     private static func smoothstep(_ fraction: Double) -> Double {

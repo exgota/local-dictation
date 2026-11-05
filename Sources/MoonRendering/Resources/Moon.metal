@@ -162,18 +162,26 @@ float microphoneMark(float2 p){p/=1.18;
   float base=seg(p,float2(-.12,-.285),float2(.12,-.285))-.044;
   return min(min(head,cradle),min(stem,base))*1.18;}
 // Original 56-unit document geometry, centered and scaled as in the pitch.
-float copyMark(float2 p){
+// Park folds in parts: `back` slides the back page out from behind the front one, `lines` draws the grooves.
+float copyMark(float2 p,float back,float lines){
   // Fit the 1.3-scaled canvas to the microphone mark's approximately .82-unit height.
   const float scale=1.3/44.;
   float2 q=float2(p.x,-p.y)/scale+float2(28.5,27.5);
-  float back=abs(box(q-float2(25.5,24.25),float2(8.,9.75),4.))-1.2;
   float front=box(q-float2(30.75,30.75),float2(8.25,10.25),4.);
+  float2 backCenter=mix(float2(30.75,30.75),float2(25.5,24.25),back);
+  float outline=back<.02?1e3:abs(box(q-backCenter,float2(8.,9.75),4.))-1.2*min(1.,back*1.6);
   // Clear the back outline around the front page, like the struck microphone's slash.
-  back=max(back,1.1-front);
-  float lines=min(seg(q,float2(26.5,26.5),float2(35.,26.5)),
-                  min(seg(q,float2(26.5,30.5),float2(35.,30.5)),
-                      seg(q,float2(26.5,34.5),float2(32.,34.5))))-.85;
-  return min(back,max(front,-lines))*scale;
+  outline=max(outline,1.1-front);
+  float grooves=min(seg(q,float2(26.5,26.5),float2(35.,26.5)),
+                    min(seg(q,float2(26.5,30.5),float2(35.,30.5)),
+                        seg(q,float2(26.5,34.5),float2(32.,34.5))))-.85*lines;
+  float page=lines<.02?front:max(front,-grooves);
+  return min(outline,page)*scale;
+}
+// The fold's three stages, from Park's linear entry progress: the moon settles into the front page,
+// the back page slides out, then the grooves draw in. Each stage is a simple shape, so no frame is a blob.
+float3 foldStages(float progress){
+  return float3(smoothing(0.,.55,progress),smoothing(.32,.86,progress),smoothing(.62,1.,progress));
 }
 float2 parkedSample(float2 p){
   float2 at=(p*float2(.5,-.5)+.5)*uRes-.5;
@@ -185,8 +193,8 @@ float2 parkedSample(float2 p){
   float tone=parkedSource.read(uint2(clamp(int2(floor(at+.5)),int2(0),limit))).g;
   return float2(mix(lower,upper,weight.y),tone);
 }
-float copied(float2 p,float w,float R){
-  float distance=mix(length(p)-R,copyMark(p),w);
+float copied(float2 p,float3 fold,float R){
+  float distance=mix(length(p)-R,copyMark(p,fold.y,fold.z),fold.x);
   if(uParkSource&&!uReduceMotion)distance+=uParkSourceWeight*(parkedSample(p).x-(length(p)-R));
   return distance;
 }
@@ -211,11 +219,12 @@ float orbTone(float2 c){
   float R=uRate<0.?.7:((.42+.2*pow(lv,.7)+ripple*lv*(.02*referenceSine(a*5.+uTime*8.)+.015*referenceSine(a*3.-uTime*6.))));
   float park=clamp(uPark,0.,1.);
   if(park>.001||(uParkSource&&uParkSourceWeight>.001)){
-    float shapeWeight=uReduceMotion?1.:park;
-    float e=1./uRes.y,d=copied(p,shapeWeight,R),mark=0.;
+    float3 fold=uReduceMotion?float3(1.):foldStages(park);
+    float shapeWeight=fold.x;
+    float e=1./uRes.y,d=copied(p,fold,R),mark=0.;
     if(d<=0.){
-      float2 g=float2(copied(p+float2(e,0),shapeWeight,R)-copied(p-float2(e,0),shapeWeight,R),
-                      copied(p+float2(0,e),shapeWeight,R)-copied(p-float2(0,e),shapeWeight,R))/(2.*e);
+      float2 g=float2(copied(p+float2(e,0),fold,R)-copied(p-float2(e,0),fold,R),
+                      copied(p+float2(0,e),fold,R)-copied(p-float2(0,e),fold,R))/(2.*e);
       float3 nb=normalize(float3(g*(1.-clamp(-d/.07,0.,1.))*1.8,1.));
       float2 q=p/R;float3 ns=float3(q,sqrt(max(1.-dot(q,q),0.)));
       float original=moonTone(ns,r/R);

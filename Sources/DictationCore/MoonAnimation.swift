@@ -2,11 +2,11 @@ import Foundation
 
 /// Timing for listening, transcribing, Park, and the stop animation.
 public struct MoonAnimation: Sendable {
-    public enum State: Sendable { case hidden, listening, silentMicrophone, transcribing, smoke, fading, parked, returning }
+    public enum State: Sendable { case hidden, listening, silentMicrophone, transcribing, smoke, fading, parked }
     public static let smokeDuration = 0.450
     public static let markTimeConstant = 0.075
-    public static let parkEntryDuration = 0.250
-    public static let parkReturnDuration = 0.200
+    /// The fold from moon to copy icon. The shader eases each of its stages, so the progress here is linear.
+    public static let parkEntryDuration = 0.550
     public static let setupTransitionDuration = 0.950
     public private(set) var state: State = .hidden
     public private(set) var beganAt: Double = 0
@@ -68,22 +68,11 @@ public struct MoonAnimation: Sendable {
         beganAt = time
     }
 
-    public mutating func releasePark(at time: Double) {
-        guard state == .parked else { return }
-        advance(to: time)
-        initialPark = park
-        state = .returning
-        beganAt = time
-    }
-
     public mutating func advance(to time: Double) {
-        // Park has a finite ease-in-out; the approved warning keeps its exponential response.
-        if state == .parked || state == .returning {
-            let target = state == .parked ? 1.0 : 0.0
-            let duration = state == .parked ? Self.parkEntryDuration : Self.parkReturnDuration
-            let fraction = min(1, max(0, (time - beganAt) / duration))
-            let progress = fraction * fraction * (3 - 2 * fraction)
-            park = initialPark + (target - initialPark) * progress
+        // Park's fold progresses linearly and the shader eases its stages; the warning keeps its exponential response.
+        if state == .parked {
+            let fraction = min(1, max(0, (time - beganAt) / Self.parkEntryDuration))
+            park = initialPark + (1 - initialPark) * fraction
         }
         let elapsed = min(0.05, max(0, previousFrame.map { time - $0 } ?? 0.016))
         previousFrame = time

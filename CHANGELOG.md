@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.2 (November 5, 2026)
+
+- When text cannot be typed, the moon folds into the copy icon in three clean steps: it becomes a page, a second page
+  slides out from behind it, then the lines draw in.
+- After you paste, the copy icon itself rises away like the moon does, instead of turning back into the moon first.
+- The copy icon stays for 5 seconds instead of about 2, so there is time to click into a field and press ⌘V.
+- Setup shows one percentage for the download and for preparing the model for this Mac, so 100% means the model is
+  ready to use. The separate “Almost ready…” wait is gone, and the percentage no longer drops back after Try Again.
+- Setup's practice step says “Writing it down…” while your words are transcribed, instead of asking you to press the
+  key again. A long sentence in the practice field ends in an ellipsis instead of being cut off.
+
 ## 1.1.1 (November 5, 2026)
 
 - Text copied after you stop dictating stays on the clipboard, even if focus moves or no text field is selected. Use

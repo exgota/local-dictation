@@ -16,7 +16,8 @@ struct SetupDictationField: NSViewRepresentable {
         field.font = .systemFont(ofSize: NSFont.systemFontSize)
         field.textColor = .labelColor
         field.usesSingleLineMode = true
-        field.lineBreakMode = .byClipping
+        // A long sentence keeps its newest words in view and marks the cut with an ellipsis.
+        field.lineBreakMode = .byTruncatingHead
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         field.setAccessibilityLabel("Try dictation")
         field.setAccessibilityIdentifier(SetupTextInsertionTarget.fieldIdentifier)
