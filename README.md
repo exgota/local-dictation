@@ -67,8 +67,8 @@ about 1.3 GB after that. Dictation is English only.
 <details>
 <summary>Opened it from the disk image or Downloads?</summary>
 
-It offers to move itself to Applications. Choose Move to
-Applications, and it moves and reopens. `Local-Dictation.zip` on the same release holds the same app.
+It offers to copy itself to Applications. Choose Move to Applications, and it copies itself there and reopens. The
+file in Downloads is left where it is. `Local-Dictation.zip` on the same release holds the same app.
 
 </details>
 
