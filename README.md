@@ -7,6 +7,8 @@
 Press Fn, say the whole prompt, press Fn again. Messaging apps like Slack get clean sentences, terminals get the words as recognized,
 and known password managers get nothing.
 
+I kept the Muse desktop app open only for its dictation hotkey. Then I realized I could build my own, so I did.
+
 **[Download for Mac](https://github.com/exgota/local-dictation/releases/latest/download/Local-Dictation.dmg)** · free
 and open source, no account · Apple silicon, macOS 27 or later, English · [install steps](#install)
 
