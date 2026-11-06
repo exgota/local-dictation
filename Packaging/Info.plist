@@ -33,7 +33,7 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>Speech model: Underdog Bark 3.0 Pro</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Local Dictation records your voice while you dictate and transcribes it on this Mac.</string>
+	<string>Local Dictation uses the microphone only while you dictate. Your speech is turned into text on this Mac, and the audio is not saved or uploaded.</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>
